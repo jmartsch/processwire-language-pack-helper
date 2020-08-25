@@ -1,1 +1,3 @@
-site/assets/files/1019
+dist/site/assets/cache/
+dist/site/assets/logs/
+dist/site/assets/sessions/
