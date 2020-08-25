@@ -12,7 +12,8 @@ Check out Bernhard's nice ProcessWire modules RockTabulator and RockFinder.
 
 ```
 cd /your/root/folder
-git clone https://github.com/jmartsch/processwire-de.git processwire-de
+git clone https://github.com/jmartsch/processwire-language-pack-helper.git processwire-language-pack-helper
+cd processwire-language-pack-helper
 git submodule update --init --recursive
 ```
 
@@ -30,7 +31,7 @@ password = password
 ```
 
 ## Translate
-Go to http://pw-lang-de-new.localhost/processwire/setup/languages/edit/?id=1019
+Go to http://processwire-language-pack-helper.localhost/processwire/setup/languages/edit/?id=1019
 
 *Note:* Please make sure to use the correct host if you don't use localhost as your development domain.
 
@@ -44,6 +45,6 @@ Suggestions are welcome
 
 Right now the manual steps you have to take are:
 
-* for and clone the pw-lang-de repo
+* fork and clone the pw-lang-de repo
 * copy the files from site/assets/files/1019 to the root dir of the pw-lang-de repo
 * create a pull request so I can check and merge this
