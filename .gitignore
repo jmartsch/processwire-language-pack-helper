@@ -1,3 +1,8 @@
 dist/site/assets/cache/
 dist/site/assets/logs/
 dist/site/assets/sessions/
+
+.DS_STORE
+.idea/
+.vscode/
+node_modules/
