@@ -1,4 +1,3 @@
-[submodule "pw-lang-de"]
+[submodule "site/assets/files/1019"]
 	path = site/assets/files/1019
-	url = https://github.com/jmartsch/pw-lang-de
-	update = merge
+	url = git@github.com:jmartsch/pw-lang-de.git
