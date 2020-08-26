@@ -1,0 +1,3 @@
+[submodule "site/assets/files/1019"]
+	path = site/assets/files/1019
+	url = git@github.com:jmartsch/pw-lang-de.git
