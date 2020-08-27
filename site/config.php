@@ -51,7 +51,7 @@ $config->debug = true;
 $config->dbHost = 'localhost';
 $config->dbName = 'processwire-lang-de';
 $config->dbUser = 'root';
-$config->dbPass = 'taUdVDtK';
+$config->dbPass = '';
 $config->dbPort = '3306';
 
 /**
