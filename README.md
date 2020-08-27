@@ -4,7 +4,7 @@ This repo sets up a processwire environment which can be used for translating fi
 
 Right now this is the boilerplate for the german language pack.
 
-This [environment idea](https://github.com/BernhardBaumrock/tabulator.test) is based upon work from [Bernhard Baumrock](https://github.com/BernhardBaumrock.)
+This [environment idea](https://github.com/BernhardBaumrock/tabulator.test) is based upon work from [Bernhard Baumrock](https://github.com/BernhardBaumrock).
 
 Check out Bernhard's nice ProcessWire modules RockTabulator and RockFinder.
  
