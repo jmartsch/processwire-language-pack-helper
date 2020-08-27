@@ -10,7 +10,7 @@ Check out Bernhard's nice ProcessWire modules RockTabulator and RockFinder.
  
 ## Installation
 
-### Clone this repo and update/init submodules
+### Clone this repo with submodules
 
 ```bash
 git clone --recurse-submodules git@github.com:jmartsch/processwire-language-pack-helper.git processwire-language-pack-helper
@@ -23,14 +23,31 @@ cd processwire-language-pack-helper
 git submodule update --init --recursive
 ```
 
+What this does is cloning this dev environment and then pulling in the language pack as a submodule.
+
+## Fork the language pack so you can commit changes
+
+Make a fork of https://github.com/jmartsch/pw-lang-de
+
+After forking go to your command line and enter the following commands (change $yourusername and $pw-lang-de-forkname):
+
+```bash
+$ cd site/assets/files/1019
+$ git remote add fork https://github.com/$yourusername>/$pw-lang-de-forkname
+```
+
 ### Restore the DB dump
 
- (from site/assets/backups/database/pw-lang-de.sql) either manually or with this PHP script via command line / terminal in your root directory:
+First change your database settings in site/config.php according to your database
+
+Then run this PHP script via command line / terminal in your root directory:
 
 ```
 php restore.php
 ```
 
+or you can use the dump from site/assets/backups/database/pw-lang-de.sql with your favorite tool like PhpMyAdmin.
+  
 ## Login
 
 ```
@@ -47,19 +64,14 @@ Go to http://processwire-language-pack-helper.localhost/processwire/setup/langua
 * abandoned are not needed any more and can safely be removed
 * empty phrases are new additions, which need to be translated
 
+## Commit your changes
+```bash
+$ cd site/assets/files/1019
+$ git add .
+$ git commit -m "Update translations"
+$ git push fork master:master
+```
+
 ## Create a pull request
 
-As we are working with a submodule which has it's own repository, it is easy to push commits to this repo.
-
-```bash
-$ cd path/to/submodule
-$ git add <stuff>
-$ git commit -m "comment"
-$ git push
-```
-### manual steps for forking and updating
-Right now the manual steps you have to take are:
-
-* fork and clone the pw-lang-de repo
-* copy the files from site/assets/files/1019 to the root dir of the pw-lang-de repo
-* create a pull request so I can check and merge this
+Go to github and create a pull request
