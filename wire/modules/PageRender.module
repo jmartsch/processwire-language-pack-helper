@@ -11,8 +11,9 @@
  * https://processwire.com
  * 
  * @method renderPage(HookEvent $event)
- * @method clearCacheFileAll(Page $page)
- * @method clearCacheFilePages(PageArray $items, Page $page)
+ * @method void clearCacheFileAll(Page $page)
+ * @method void clearCacheFilePages(PageArray $items, Page $page)
+ * @method string saveCacheFileReady(Page $page, $data)
  *
  */
 
@@ -80,7 +81,8 @@ class PageRender extends WireData implements Module, ConfigurableModule {
 	 * 
 	 */
 	public function ready() {
-		if($this->wire('page')->template != 'admin') {
+		// todo 3.0.190: remove template!=admin condition: https://github.com/processwire/processwire-issues/issues/1424
+		if($this->wire()->page->template != 'admin') { 
 			$this->addHookBefore('Page::render', $this, 'beforeRenderPage', array('priority' => 1));
 		}
 	}
@@ -328,6 +330,22 @@ class PageRender extends WireData implements Module, ConfigurableModule {
 	}
 
 	/**
+	 * Hook called when cache file is about to be saved for a Page
+	 *
+	 * #pw-hooker
+	 *
+	 * @param Page $page
+	 * @param string $data Data that will be saved to cache file
+	 * @return string Data to save to cache file
+	 * @since 3.0.178
+	 *
+	 */
+	public function ___saveCacheFileReady(Page $page, $data) {
+		if($page) {} // ignore
+		return $data;
+	}
+
+	/**
 	 * Hook called before any other hooks to Page::render
 	 * 
 	 * We use this to determine if Page::render() should be a render() or a renderField()
@@ -547,7 +565,11 @@ class PageRender extends WireData implements Module, ConfigurableModule {
 			}
 		}
 
-		if($data && $cacheAllowed && $cacheFile) $cacheFile->save($data);
+		if($data && $cacheAllowed && $cacheFile) {
+			$data = $this->saveCacheFileReady($page, $data);
+			$cacheFile->save($data);
+		}
+		
 		$event->return = $data; 
 
 		if(!$of) $page->of($of);
@@ -580,6 +602,7 @@ class PageRender extends WireData implements Module, ConfigurableModule {
 		if(!$pos) {
 			// there still may be region related stuff that needs to be removed like <region> tags
 			$markupRegions->removeRegionTags($html);
+			$html = $markupRegions->stripOptional($html);
 			return;
 		}
 		

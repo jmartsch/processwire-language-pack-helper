@@ -111,7 +111,7 @@ function __($text, $textdomain = null, $context = '') {
 	$textArray = false;
 	$encode = $options['entityEncode'];
 	$user = wire('user');
-	$language = $user ? $user->language : null; /** @var Language $language */
+	$language = $user ? $user->get('language') : null; /** @var Language $language */
 
 	if(!is_string($text)) {
 		// getting/setting options or translating with multiple phrases accepted
@@ -119,7 +119,7 @@ function __($text, $textdomain = null, $context = '') {
 			// multiple translations accepted for text, with 1st being newest
 			$textArray = $text;
 			$text = reset($textArray);
-		} else if($text === true) {
+		} else if($text === true && $textdomain !== null) {
 			// setting (or getting) custom option
 			list($option, $values) = array($textdomain, $context);
 			if($option === 'replacements' || $option === 'translations') {
@@ -135,8 +135,10 @@ function __($text, $textdomain = null, $context = '') {
 				return __(true, 'translations', $option);
 			} else {
 				// set and get other options
-				if($context !== '') $options[$option] = $values;
-				return isset($options[$option]) ? $options[$option] : null;
+				if($option === 'encode') $option = 'entityEncode'; // supported alias
+				$currentValue = isset($options[$option]) ? $options[$option] : null; // existing value is returned even when setting
+				if($values !== '' && $values !== $currentValue) $options[$option] = $values;
+				return $currentValue;
 			}
 		} else if(is_object($text)) {
 			$text = (string) $text;
@@ -311,7 +313,7 @@ function wireLangEntityEncode($value = '') {
 }
 
 /**
- * Set predefined fallbaack translation values
+ * Set predefined fallback translation values
  * 
  * These predefined translations are used when an existing translation is
  * not available, enabling you to provide translations programmatically.

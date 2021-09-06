@@ -294,8 +294,8 @@ class PagesNames extends Wire {
 			$format = empty($options['format']) ? '' : $options['format'];
 		}
 		
-		/** @var Languages|null $languages */
-		$languages = $this->wire('languages');
+		$languages = $this->wire()->languages;
+		$sanitizer = $this->wire()->sanitizer;
 		
 		$options = array_merge($defaults, $options);
 		if(!strlen($format)) $format = $this->defaultPageNameFormat($page);
@@ -319,6 +319,10 @@ class PagesNames extends Wire {
 			// title	
 			$name = trim((string) $page->title);
 			$formatType = 'field';
+			
+		} else if($format === 'id' && $page->id) {
+			// page ID, when it is known
+			$name = (string) $page->id; 
 			
 		} else if($format === 'random') {
 			// globally unique randomly generated page name
@@ -354,7 +358,7 @@ class PagesNames extends Wire {
 			$name = wireDate($format);
 			$formatType = 'date';
 
-		} else if($this->wire('sanitizer')->fieldName($format) === $format) {
+		} else if($sanitizer->fieldName($format) === $format) {
 			// single field name or predefined string
 			// this can also return null, which falls back to if() statement below
 			$name = (string) $page->getUnformatted($format);
@@ -395,8 +399,7 @@ class PagesNames extends Wire {
 
 		if(strlen($name) > $this->nameMaxLength) $name = $this->adjustNameLength($name);
 		
-		$utf8 = $this->wire('config')->pageNameCharset === 'UTF8';
-		$sanitizer = $this->wire('sanitizer');
+		$utf8 = $this->wire()->config->pageNameCharset === 'UTF8';
 		$name = $utf8 ? $sanitizer->pageNameUTF8($name) : $sanitizer->pageName($name, Sanitizer::translate);
 		
 		if($language) $languages->unsetLanguage();
@@ -419,7 +422,7 @@ class PagesNames extends Wire {
 	 *
 	 * @param string|Page|array $name Name to make unique
 	 *  You may optionally substitute the $page argument or $options arguments here, if that is all you need.
-	 * @param Page||string|null|array Page to exclude from duplicate check and/or to pull $name or parent from (if not otherwise specified). 
+	 * @param Page|string|null|array Page to exclude from duplicate check and/or to pull $name or parent from (if not otherwise specified). 
 	 *  Note that specifying a Page is important if the page already exists, as it is used as the page to exclude when checking for 
 	 *  name collisions, and we want to exclude $page from that check. You may optionally substitute the $options or $name arguments
 	 *  here, if that is all you need. If $parent or $name are specified separately from this $page argument, they will override
@@ -762,15 +765,18 @@ class PagesNames extends Wire {
 	 */
 	public function pageNameHasConflict(Page $page) {
 		
+		$config = $this->wire()->config;
+		$usersPageIDs = $config->usersPageIDs;
+		$checkUser = in_array($page->parent_id, $usersPageIDs); 
 		$reason = '';
 		$name = $page->name;
 	
-		if($this->wire('config')->pageNameCharset == 'UTF8') {
-			$name = $this->wire('sanitizer')->pageName($name, Sanitizer::toAscii);
+		if($config->pageNameCharset == 'UTF8') {
+			$name = $this->wire()->sanitizer->pageName($name, Sanitizer::toAscii);
 		}
 		
 		$sql = "SELECT id, status, parent_id FROM pages WHERE name=:name AND id!=:id";
-		$query = $this->wire('database')->prepare($sql);
+		$query = $this->wire()->database->prepare($sql);
 		$query->bindValue(':name', $name);
 		$query->bindValue(':id', $page->id, \PDO::PARAM_INT);
 		$query->execute();
@@ -781,15 +787,27 @@ class PagesNames extends Wire {
 		}
 		
 		while($row = $query->fetch(\PDO::FETCH_ASSOC)) {
-			if($row['status'] & Page::statusUnique) {
+			
+			$parentID = (int) $row['parent_id']; 
+			$status = (int) $row['status']; 
+			
+			if($status & Page::statusUnique) {
 				// name is already required to be unique globally
 				$reason = sprintf($this->_("Another page is using name “%s” and requires it to be globally unique"), $page->name);
+				break;
 			}
-			if((int) $row['parent_id'] === $page->parent_id) {
+			
+			if($checkUser && in_array($parentID, $usersPageIDs)) {
+				// username collision
+				$reason = sprintf($this->_('Another user is already using the name “%s”'), $page->name);
+				break;
+			}
+			
+			if($parentID === $page->parent_id) {
 				// name already consumed by another page with same parent
 				$reason = sprintf($this->_('Another page with same parent is already using name “%s”'), $page->name);
-			}
-			if($reason) break;
+				break;
+			} 
 		}
 		
 		// page requires that it be the only one with this name, so if others have it, then disallow

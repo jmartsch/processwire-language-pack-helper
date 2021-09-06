@@ -23,7 +23,7 @@
  *
  */
 
-class ProcessTemplate extends Process {
+class ProcessTemplate extends Process implements ConfigurableModule {
 
 	/** @var InputfieldForm */
 	protected $form; 
@@ -106,6 +106,12 @@ class ProcessTemplate extends Process {
 				$this->_('Do not include a file extension.'),
 			'invalidTemplateName' => $this->_('Template name does not match required format.'),
 			'nameAlreadyInUse' => $this->_('The name "%s" is already in use'),
+			'name' => $this->_('Name'), 
+			'label' => $this->_('Label'), 
+			'type'  => $this->_('Type'), 
+			'tags' => $this->_('Tags'), 
+			'manageTags' => $this->_('Manage tags'), 
+			'templates' => $this->_('Templates'),
 		);
 
 		if($this->input->urlSegment1) $this->modules->get("JqueryWireTabs"); 
@@ -170,21 +176,25 @@ class ProcessTemplate extends Process {
 		$systemLabel = $this->_x('System', 'tag'); // Tag applied to the group of built-in/system fields
 		$hasFilters = $this->session->getFor($this, 'filterField');
 		$showSystem = $this->session->getFor($this, 'filterSystem');
-		$collapsedTags = array();
 		$caseTags = array(); // indexed by lowercase version of tag
+		$collapsedTags = $this->wire()->modules->getConfig($this, 'collapsedTags'); 
+		if(!is_array($collapsedTags)) $collapsedTags = array();
+		foreach($collapsedTags as $key => $tag) {
+			$collapsedTags[$key] = strtolower($tag);
+		}
 
 		if(!$hasFilters) foreach($this->templates as $template) {
 			if($showSystem && ($template->flags & Template::flagSystem)) {
 				$template->tags .= " $systemLabel";
 			}
-			if(empty($template->tags)) {
+			if(!strlen($template->tags)) {
 				$tag = strtolower($untaggedLabel);
 				if(!isset($templatesByTag[$tag])) $templatesByTag[$tag] = array();
 				$templatesByTag[$tag][$template->name] = $template;
 				$caseTags[$tag] = $untaggedLabel;
 				continue; 
 			}
-			$tags = explode(' ', trim($template->tags));
+			$tags = $template->getTags();
 			foreach($tags as $tag) {
 				if(empty($tag)) continue; 
 				$caseTag = ltrim($tag, '-');
@@ -198,7 +208,6 @@ class ProcessTemplate extends Process {
 				if(!isset($caseTags[$tag])) $caseTags[$tag] = $caseTag; 
 			}
 		}
-
 		$tagCnt = count($templatesByTag);
 		if($tagCnt > 1) {
 			/** @var InputfieldWrapper $form */
@@ -231,6 +240,13 @@ class ProcessTemplate extends Process {
 		$button->icon = 'plus-circle';
 		$button->addClass('add_template_button'); 
 		$button->showInHeader();
+		$out .= $button->render();
+		
+		$button = $this->modules->get('InputfieldButton');
+		$button->id = 'tags_button';
+		$button->href = './tags/';
+		$button->icon = 'tags';
+		$button->value = $this->labels['manageTags'];
 		$out .= $button->render();
 
 		$button = $this->modules->get('InputfieldButton');
@@ -387,37 +403,45 @@ class ProcessTemplate extends Process {
 	 */
 	public function ___getListTableRow(Template $template, $useLabel = true) {
 
+		$editUrl = "edit?id={$template->id}";
 		$flags = array();
 		$flagDefs = array(
 			'system' => array(
 				'label' => $this->_x('system', 'list-note'),
-				'icon' => 'puzzle-piece'
-				),
+				'icon' => 'puzzle-piece',
+				'href' => ($this->wire()->config->advanced ? "$editUrl#find-flagSystem" : $editUrl),
+			),
 			'access' => array(
 				'label' => $this->_x('access', 'list-note'),
-				'icon' => 'key'
-				),
+				'icon' => 'key',
+				'href' => "$editUrl#find-tab_access",
+			),
 			'no-file' => array(
 				'label' => $this->_x('no-file', 'list-note'),
-				'icon' => 'ban'
-				),
+				'icon' => 'ban',
+				'href' => "$editUrl#find-tab_files",
+			),
 			'cache' => array(
 				'label' => $this->_x('cache', 'list-note'),
-				'icon' => 'clock-o'
-				),
+				'icon' => 'clock-o',
+				'href' => "$editUrl#find-tab_cache",
+			),
 			'procache' => array(
 				'label' => $this->_x('ProCache', 'list-note'),
-				'icon' => 'fighter-jet'
+				'icon' => 'fighter-jet',
+				'href' => "$editUrl#find-tab_cache",
 			),
 			'url-segments' => array(
 				'label' => $this->_x('URL segments', 'list-note'),
-				'icon' => 'sitemap'
-				),
+				'icon' => 'sitemap',
+				'href' => "$editUrl#find-urlSegments",
+			),
 			'page-numbers' => array(
 				'label' => $this->_x('Page numbers', 'list-note'),
-				'icon' => 'list-ol'
-				)
-			);
+				'icon' => 'list-ol',
+				'href' => "$editUrl#find-allowPageNum",
+			)
+		);
 
 		$filterField = $this->session->getFor($this, 'filterField');
 		$filterSystem = $this->session->getFor($this, 'filterSystem');
@@ -439,7 +463,9 @@ class ProcessTemplate extends Process {
 			$class = 'templateFlag' . ucfirst($flag);
 			$flag = $flagDefs[$flag]; 
 			$label = str_replace('-', ' ', ucfirst($flag['label']));
-			$notes .= "<a class='tooltip templateFlag $class' title='$label'><i class='fa fa-$flag[icon]'></i>&nbsp;</a> ";
+			$href = empty($flag['href']) ? '#' : $flag['href'];
+			$icon = wireIconMarkup($flag['icon'], 'fw'); 
+			$notes .= "<a href='$href' class='tooltip templateFlag $class' title='$label'>$icon</a> ";
 		}
 
 		$numPages = $template->getNumPages();
@@ -449,7 +475,7 @@ class ProcessTemplate extends Process {
 		if($template->fieldgroup && $template->fieldgroup->name != $template->name) $numFields .= " " . $template->fieldgroup->name; 
 	
 		$row = array();
-		$row["{$template->name} "] = "edit?id={$template->id}";
+		$row["{$template->name} "] = $editUrl;
 		if($useLabel) {
 			$icon = $template->getIcon();
 			$icon = $icon ? wireIconMarkup($icon, 'fw') : '';
@@ -612,7 +638,7 @@ class ProcessTemplate extends Process {
 		$field->collapsed = count($templateFiles) ? Inputfield::collapsedYes : Inputfield::collapsedNo; 
 		$form->append($field); 
 
-		$form->append($this->buildEditFormImport(true)); 
+		$form->append($this->buildEditFormActionsImportFieldgroup()); 
 
 		/** @var InputfieldSubmit $field */
 		$field = $this->modules->get('InputfieldSubmit');
@@ -658,6 +684,8 @@ class ProcessTemplate extends Process {
 	 *
 	 */
 	protected function ___buildEditForm(Template $template) {
+		
+		$input = $this->wire()->input;
 
 		/** @var InputfieldForm $form */
 		$form = $this->modules->get('InputfieldForm');
@@ -665,7 +693,7 @@ class ProcessTemplate extends Process {
 		$form->attr('action', "save"); 
 		$form->attr('method', 'post'); 
 
-		if(!is_file($template->filename) && !count($this->input->post)) {
+		if(!is_file($template->filename) && !count($input->post) && !$input->get('modal')) {
 			$this->message(sprintf($this->_('Pages using this template are not viewable because the template file (%s) does not exist [no-file].'), $template->name . '.' . $this->config->templateExtension)); 
 		}
 
@@ -684,6 +712,7 @@ class ProcessTemplate extends Process {
 		$t->add($this->buildEditFormAccess($template)); 
 		$overrides = $this->buildEditFormAccessOverrides($template);
 		if($overrides) $t->add($overrides);
+		$t->add($this->buildEditFormAccessFiles($template));
 		$form->add($t); 
 
 		$t = $this->wire(new InputfieldWrapper());
@@ -698,12 +727,14 @@ class ProcessTemplate extends Process {
 		$t->attr('title', $this->_x('URLs', 'tab'));
 		// $t->head = $this->_('Optional settings for URLs of pages using this template');
 		$t->attr('class', 'WireTab'); 
+		$t->attr('id', 'tab_urls');
 		$t->add($this->buildEditFormURLs($template)); 
 		$form->add($t);
 		
 		$t = $this->wire(new InputfieldWrapper());
 		$t->attr('title', $this->_x('Files', 'tab'));
 		$t->attr('class', 'WireTab');
+		$t->attr('id', 'tab_files');
 		$t->add($this->buildEditFormFile($template));
 		$form->add($t); 
 
@@ -719,6 +750,7 @@ class ProcessTemplate extends Process {
 		$t->attr('title', $this->_x('Advanced', 'tab'));
 		// $t->head = $this->_('Optional advanced template settings');
 		$t->attr('class', 'WireTab'); 
+		$t->attr('id', 'tab_advanced');
 		$t->add($this->buildEditFormAdvanced($template)); 
 		$form->add($t); 
 
@@ -727,24 +759,26 @@ class ProcessTemplate extends Process {
 			$t->attr('title', $this->_x('System', 'tab'));
 			// $t->head = $this->_('System-specific template settings');
 			$t->attr('class', 'WireTab'); 
+			$t->attr('id', 'tab_system');
 			$t->add($this->buildEditFormSystem($template)); 
 			$form->add($t); 
 		}
 
 		$t = $this->wire(new InputfieldWrapper());
 		$t->attr('class', 'WireTab'); 
-		$t->attr('title', $this->_x('Import', 'tab'));
-		// $t->head = $this->_('Import fields from another template');
-		$t->add($this->buildEditFormImport());
+		$t->attr('title', $this->_x('Actions', 'tab'));
+		$t->attr('id', 'tab_actions');
+		$t->add($this->buildEditFormActions($template));
 		$form->add($t);
 
+		/*
 		$t = $this->wire(new InputfieldWrapper());
 		$t->attr('title', $this->_x('Delete', 'tab'));
 		$t->attr('id', 'WireTabDelete'); 
-		// $t->head = $this->_('Delete template');
 		$t->attr('class', 'WireTab'); 
 		$t->add($this->buildEditFormDelete($template)); 
 		$form->add($t); 	
+		*/
 
 		// --------------------
 
@@ -801,7 +835,7 @@ class ProcessTemplate extends Process {
 		$f = $this->modules->get('InputfieldText');
 		$f->attr('name', 'templateLabel');
 		$f->attr('value', $template->label);
-		$f->icon = 'barcode';
+		$f->icon = 'tag';
 		$f->label = $this->_x('Label', 'field-label');
 		$f->description = $this->_('An optional label to describe this template.');
 		$f->collapsed = Inputfield::collapsedBlank;
@@ -809,6 +843,17 @@ class ProcessTemplate extends Process {
 			$f->useLanguages = true;
 			foreach($languages as $language) $f->set('value' . $language->id, $template->get('label' . $language->id));
 		}
+		$t->add($f);
+		
+		$icon = $template->getIcon(true);
+		/** @var InputfieldIcon  $f */
+		$f = $this->modules->get("InputfieldIcon");
+		$f->attr('name', 'pageLabelIcon');
+		$f->attr('value', $icon);
+		$f->icon = $icon ? $icon : 'puzzle-piece';
+		$f->label = $this->_('Icon');
+		$f->description = $this->_('Select an icon that will be associated with this template and pages using this template (in the admin).');
+		$f->collapsed = Inputfield::collapsedBlank;
 		$t->add($f);
 		
 		if($this->numPages > 0 && version_compare(PHP_VERSION, '5.3.8') >= 0) {
@@ -861,10 +906,11 @@ class ProcessTemplate extends Process {
 
 		/** @var InputfieldCheckbox $field */
 		$field = $this->modules->get('InputfieldCheckbox');
-		$field->label = $this->_('Confirm deletion'); 
+		$field->label = $this->_('Delete template');
 		$field->attr('id+name', "delete"); 
 		$field->attr('value', $template->id); 
-		$field->icon = 'times-circle';
+		$field->icon = 'trash-o';
+		$field->collapsed = Inputfield::collapsedYes;
 
 		$fieldgroup = $this->wire('fieldgroups')->get($template->name); 
 		$numFieldgroupTemplates = 0;
@@ -875,24 +921,28 @@ class ProcessTemplate extends Process {
 			}
 		}
 
-		$description = $this->_('This template may not be deleted');
+		$nopeLabel = $this->_('This template may not be deleted');
+		$naLabel = $this->_('Not available for reason listed below');
 
 		if($template->flags & Template::flagSystem) {
-			$field->description = $description;
-			$field->notes = $this->_('System templates cannot be deleted'); 
+			$field->label2 = $naLabel;
+			$field->notes = $nopeLabel . ' - ' . $this->_('System templates cannot be deleted'); 
 			$field->attr('disabled', 'disabled'); 
 
 		} else if($this->numPages > 0) {
-			$field->description = $description; 
-			$field->notes = sprintf($this->_n('Template is used by 1 page', 'Template is used by %d pages', $this->numPages), $this->numPages); // Template can't be deleted because it's in use
+			$field->label2 = $naLabel; 
+			$field->notes = $nopeLabel . ' - ' . 
+				sprintf($this->_n('Template is used by 1 page', 'Template is used by %d pages', $this->numPages), $this->numPages); // Template can't be deleted because it's in use
 			$field->attr('disabled', 'disabled'); 
 
 		} else if($numFieldgroupTemplates > 0) {
-			$field->description = $description; 
-			$field->notes = sprintf($this->_n("This template's fieldgroup is used by 1 other template", "This template's fieldgroup is used by %d other templates", $numFieldgroupTemplates), $numFieldgroupTemplates); // Template can't be deleted because it's fieldgroup is in use
+			$field->label2 = $naLabel; 
+			$field->notes = $nopeLabel . ' - ' . 
+				sprintf($this->_n("This template's fieldgroup is used by 1 other template", "This template's fieldgroup is used by %d other templates", $numFieldgroupTemplates), $numFieldgroupTemplates); // Template can't be deleted because it's fieldgroup is in use
 			$field->attr('disabled', 'disabled'); 
 
 		} else {
+			$field->label2 = $this->_('Confirm deletion'); 
 			$field->description = $this->_('Note that deleting the template only removes it from the database, it does not delete the template file on disk.'); // Note about template files not being deleted
 		}
 
@@ -968,11 +1018,29 @@ class ProcessTemplate extends Process {
 
 		// if this template isn't defining it's fields, then just show what it's using
 		if($template->fieldgroup->name != $template->name) return $this->buildEditFormShowFields($template); 
+	
+		if(strpos($template->name, 'field-') === 0) {
+			list(,$fieldName) = explode('-', $template->name, 2);
+			$forField = $this->wire()->fields->get($fieldName);
+		} else {
+			$forField = null;
+		}
 
 		/** @var InputfieldAsmSelect $select */
 		$select = $this->modules->get('InputfieldAsmSelect'); 
 		$select->label = $this->_x('Fields', 'field-label');
-		$select->description = $this->_('Define the fields that are used by this template. You may also drag and drop fields to the desired order or [create a new field](../field/add).'); // Fields definition, description
+	
+		if($forField) {
+			$select->description = sprintf($this->_('Define the custom fields for “%s”. It is not necessary to configure anything else here.'), $forField->name);
+		} else {
+			$select->description = 
+				$this->_('Select the fields that are used by this template and drag/drop to the desired order.') . ' ' . 
+				sprintf(
+					$this->_('You may also click field name or label to edit in the context of this template, click/drag the percent indicator to adjust width, or [create a new field](%s).'),
+					'../field/add'
+				);
+			$select->notes = $this->_('Save this template to make newly added fields editable here.'); 
+		}
 		$select->icon = 'cube';
 		$select->attr('name', 'fieldgroup_fields'); 
 		$select->attr('id', 'fieldgroup_fields'); 
@@ -1062,36 +1130,80 @@ class ProcessTemplate extends Process {
 	}
 	
 	/**  
-	 * Build the "import" tab for edit form
+	 * Build the "Actions" tab for edit form
 	 * 
-	 * @param bool $collapsed
+	 * @param Template $template
 	 * @return InputfieldWrapper
 	 * 
 	 */
-	protected function buildEditFormImport($collapsed = false) {
+	protected function buildEditFormActions(Template $template) {
 
 		/** @var InputfieldWrapper $form */
 		$form = $this->wire(new InputfieldWrapper());
-
-		/** @var InputfieldSelect $field */
-		$field = $this->modules->get("InputfieldSelect"); 
-		$field->label = $this->_('Duplicate fields used by another template'); 
-		$field->description = $this->_('If you want to duplicate fields used by another template, select it here. Fields already present in this template will be left alone.'); // Duplicate fields, description
-		$field->icon = 'cube';
-		$field->attr('id+name', 'import_fieldgroup'); 
-		$field->addOption(''); 
-		$field->attr('value', ''); 
-		if($collapsed) $field->collapsed = Inputfield::collapsedYes;
-
-		foreach($this->fieldgroups->find("sort=name") as $fieldgroup) {
-			$template = $this->templates->get($fieldgroup->name); 	
-			if($template && ($template->flags & Template::flagSystem) && !$this->config->advanced) continue; 
-			if($this->template && $fieldgroup->name == $this->template->name) continue; 
-			$field->addOption($fieldgroup->name); 
+		
+		if(!($template->flags & Template::flagSystem)) {
+			/** @var InputfieldName $field */
+			$field = $this->modules->get("InputfieldName");
+			$field->label = $this->_('Rename template');
+			$field->description = $this->_('The name used to refer to this template. This is also the default filename of the template file (with .php extension) in /site/templates/.') . ' '; // Rename template, description
+			$field->icon = 'code';
+			$field->required = false;
+			if(basename($template->filename, '.php') == $template->name) {
+				if(is_writable($template->filename)) {
+					$field->description .= $this->_('The template filename is writable and will be renamed as well.'); // Rename template, filename writable, description
+				} else {
+					$field->description .= $this->_('The template file is not writable so you will have to rename it manually (instructions will be provided after you save).'); // Rename template, filename not writable, description
+				}
+			}
+			$field->notes = $this->labels['templateNameFormat'];
+			$field->attr('id+name', 'rename');
+			$field->attr('value', $template->name);
+			$field->collapsed = Inputfield::collapsedYes;
+			$form->append($field);
 		}
 
-		$form->add($field); 
+		// --------------------
+
+		/** @var InputfieldText $field */
+		$field = $this->modules->get("InputfieldText");
+		$field->attr('id+name', 'clone_template');
+		$field->label = $this->_('Duplicate/clone this template');
+		$field->description = $this->_('Enter the name of the new template you want to create. The clone will be created when you save. If your templates directory is writable and the template has a file, it will also be cloned.'); // Clone template, description
+		$field->notes = $this->labels['templateNameFormat'];
+		$field->collapsed = Inputfield::collapsedYes;
+		$field->icon = 'clone';
+		$form->append($field);
+
+		// --------------------
+
+		$form->add($this->buildEditFormActionsImportFieldgroup()); 
+		$form->add($this->buildEditFormDelete($template));
+		
 		return $form;
+	}
+
+	/**
+	 * @return InputfieldSelect
+	 * 
+	 */
+	protected function buildEditFormActionsImportFieldgroup() {
+		/** @var InputfieldSelect $field */
+		$field = $this->modules->get("InputfieldSelect");
+		$field->label = $this->_('Copy fields from another template');
+		$field->description = $this->_('If you want to copy fields used by another template, select it here. Fields already present in this template will be left alone.'); // Duplicate fields, description
+		$field->icon = 'cube';
+		$field->attr('id+name', 'import_fieldgroup');
+		$field->addOption('');
+		$field->attr('value', '');
+		$field->collapsed = Inputfield::collapsedYes;
+
+		foreach($this->fieldgroups->find("sort=name") as $fieldgroup) {
+			$template = $this->templates->get($fieldgroup->name);
+			if($template && ($template->flags & Template::flagSystem) && !$this->config->advanced) continue;
+			if($this->template && $fieldgroup->name == $this->template->name) continue;
+			$field->addOption($fieldgroup->name);
+		}
+		return $field;
 	}
 
 	/**
@@ -1246,19 +1358,20 @@ class ProcessTemplate extends Process {
 		$form = $this->wire(new InputfieldWrapper());
 		/** @var Languages|null $languages */
 		$languages = $this->wire('languages');
+		$advanced = $this->wire()->config->advanced;
 
 		// --------------------
 
-		/** @var InputfieldText $field */
-		$field = $this->modules->get("InputfieldText"); 
+		/** @var InputfieldTextTags $field */
+		$field = $this->modules->get('InputfieldTextTags'); 
 		$field->attr('name', 'tags'); 
 		$field->attr('value', $template->tags); 
 		$field->label = $this->_('Tags');
 		$field->icon = 'tags';
+		$field->allowUserTags = true;
+		$field->setTagsList($this->wire()->templates->getTags());
 		$field->description = $this->_('If you want to visually group this template with others in the templates list, enter a one-word tag. Enter the same tag on other templates you want to group with. To specify multiple tags, separate each with a space. Use of tags may be worthwhile if your site has a large number of templates.'); // Description for field tags
-		$field->notes = 
-			$this->_('Each tag must be one word (hyphenation is okay).') . " " . 
-			$this->_('To make a tag collapsed in the templates list, prepend a hyphen to it, like this: -hello');
+		$field->notes = $this->_('Each tag must be one word (hyphenation is okay).') . ' [' . $this->labels['manageTags'] . '](./tags/)';
 		$form->add($field); 
 
 		// --------------------
@@ -1303,37 +1416,6 @@ class ProcessTemplate extends Process {
 		// --------------------
 
 
-		if(!($template->flags & Template::flagSystem)) { 
-			$field = $this->modules->get("InputfieldName"); 
-			$field->label = $this->_('Rename Template');
-			$field->description = $this->_('The name used to refer to this template. This is also the default filename of the template file (with .php extension) in /site/templates/.') . ' '; // Rename template, description
-			if(basename($template->filename, '.php') == $template->name) {
-				 if(is_writable($template->filename)) {
-					 $field->description .= $this->_('The template filename is writable and will be renamed as well.'); // Rename template, filename writable, description
-				 } else {
-					 $field->description .= $this->_('The template file is not writable so you will have to rename it manually (instructions will be provided after you save).'); // Rename template, filename not writable, description
-				 }
-			}
-			$field->notes = $this->labels['templateNameFormat'];
-			$field->attr('id+name', 'rename'); 
-			$field->attr('value', $template->name); 
-			$field->collapsed = Inputfield::collapsedYes;
-			$form->append($field); 
-		}
-
-		// --------------------
-
-		$field = $this->modules->get("InputfieldText"); 
-		$field->attr('id+name', 'clone_template');
-		$field->label = $this->_('Duplicate/clone this template?');
-		$field->description = $this->_('Enter the name of the new template you want to create. The clone will be created when you save. If your templates directory is writable and the template has a file, it will also be cloned.'); // Clone template, description
-		$field->notes = $this->labels['templateNameFormat'];
-		$field->collapsed = Inputfield::collapsedYes; 
-		$field->icon = 'clone';
-		$form->append($field);
-		
-		// --------------------
-	
 		/** @var InputfieldRadios $field */
 		$field = $this->modules->get('InputfieldRadios');
 		$field->attr('id+name', 'errorAction');
@@ -1350,17 +1432,6 @@ class ProcessTemplate extends Process {
 	
 		$pageLabelField = $template->pageLabelField; 
 		$icon = $template->getIcon(true);
-
-		$field = $this->modules->get("InputfieldIcon");
-		$field->attr('name', 'pageLabelIcon');
-		$field->attr('value', $icon); 
-		$field->icon = $icon ? $icon : 'puzzle-piece';
-		$field->label = $this->_('Icon');
-		$field->description = $this->_('Select an icon that will be associated with this template and pages using this template (in the admin).'); 
-		$form->append($field);
-		
-		// --------------------
-		
 		if($icon) $pageLabelField = str_replace($icon, '', $pageLabelField); 
 
 		/** @var InputfieldText $field */
@@ -1369,6 +1440,7 @@ class ProcessTemplate extends Process {
 		$field->label = $this->_('List of fields to display in the admin Page List');
 		$field->description = $this->_("Enter one or more field names assigned to this template to display in the admin Page List when listing pages using this template. If left blank, the fields specified on the ProcessPageList module configuration will be used instead. Field names should be separated by a space and/or comma. Blank fields will be ignored."); // Page list fields, description
 		$field->description .= ' ' . $this->_('You may also use your own format (and any additional punctuation/characters) by specifying field names in brackets, i.e. {name}, {categories.title}, etc.'); // Page list fields, description 2
+		$field->icon = 'list';
 		$notes = 'name, ';
 		foreach($template->fields as $f) if(!$f->type instanceof FieldtypeFieldsetOpen) $notes .= $f->name . ", ";
 		$field->notes = $this->_('You may enter one or more of these fields:') . ' ' . rtrim($notes, ", ") . ". ";
@@ -1392,7 +1464,7 @@ class ProcessTemplate extends Process {
 		$field->attr('name', 'noChangeTemplate');
 		$field->label = $this->_("Don't allow pages to change their template?");
 		$field->description = $this->_("When checked, pages using this template will be unable to change to another template."); // noChangeTemplate option, description
-		if($this->wire('config')->advanced) $field->notes = 'API: $template->noChangeTemplate = 1; // ' . $label0; 
+		if($advanced) $field->notes = 'API: $template->noChangeTemplate = 1; // ' . $label0; 
 
 		$field->attr('value', 1);
 		if($template->noChangeTemplate) {
@@ -1409,7 +1481,7 @@ class ProcessTemplate extends Process {
 		$field->attr('name', 'noUnpublish');
 		$field->label = $this->_("Don't allow unpublished pages");
 		$field->description = $this->_("When checked, pages using this template may only exist in a published state and may not be unpublished."); // noUnpublish option, description
-		if($this->wire('config')->advanced) $field->notes = 'API: $template->noUnpublish = 1; // ' . $label0; 
+		if($advanced) $field->notes = 'API: $template->noUnpublish = 1; // ' . $label0; 
 
 		$field->attr('value', 1);
 		if($template->noUnpublish) {
@@ -1426,7 +1498,7 @@ class ProcessTemplate extends Process {
 		$field->attr('name', 'allowChangeUser');
 		$field->label = $this->_("Allow the 'created user' to be changed on pages?");
 		$field->description = $this->_("When checked, pages using this template will have an option to change the 'created by user' (for superusers only). It will also enable the \$page->createdUser or \$page->created_users_id fields to be saved via the API."); // allowChangeUser option, description
-		if($this->wire('config')->advanced) $field->notes = 'API: $template->allowChangeUser = 1; // ' . $label0; 
+		if($advanced) $field->notes = 'API: $template->allowChangeUser = 1; // ' . $label0; 
 
 		$field->attr('value', 1);
 		if($template->allowChangeUser) {
@@ -1443,7 +1515,7 @@ class ProcessTemplate extends Process {
 		$field->attr('name', 'noMove');
 		$field->label = $this->_("Don't allow pages to be moved?");
 		$field->description = $this->_("If you want to prevent pages using this template from being moved (changing parent) then check this box."); // noMove option, description
-		if($this->wire('config')->advanced) $field->notes = 'API: $template->noMove = 1; // ' . $label0;
+		if($advanced) $field->notes = 'API: $template->noMove = 1; // ' . $label0;
 
 		$field->attr('value', 1);
 		if($template->noMove) {
@@ -1461,7 +1533,7 @@ class ProcessTemplate extends Process {
 			$field->attr('name', 'noLang');
 			$field->label = $this->_("Disable multi-language support for this template?");
 			$field->description = $this->_("When checked, pages using this template will only use the default language.");
-			if($this->wire('config')->advanced) $field->notes = 'API: $template->noLang = 1; // ' . $label0; 
+			if($advanced) $field->notes = 'API: $template->noLang = 1; // ' . $label0; 
 
 			$field->attr('value', 1);
 			if($template->noLang) {
@@ -1653,6 +1725,7 @@ class ProcessTemplate extends Process {
 		$field = $this->modules->get('InputfieldAsmSelect'); 
 		$field->attr('name', 'childTemplates'); 
 		$field->label = $this->_('Allowed template(s) for children');
+		$field->icon = 'indent';
 		$field->description = $this->_('Select the template(s) that will be allowed for children of pages using this template. Use this only if you specifically want to restrict placement of pages using this template.'); // childTemplates option, description
 		$field->description .= ' ' . $this->_("If none are selected then any are allowed, within the user's access limits. An example usage could be a 'news-list' template that is only allowed to have children using 'news-item' or 'press-release' templates."); // childTemplates option, notes
 
@@ -1695,6 +1768,7 @@ class ProcessTemplate extends Process {
 		$field->label = $this->_('Allowed template(s) for parents');
 		$field->description = $this->_("Select the template(s) that will be allowed as parents for pages using this template. Use this only if you specifically want to restrict placement of pages using this template."); // parentTemplates option, description
 		$field->description .= ' ' . $this->_("If none are selected then any parent template is allowed, within the user's access limits. An example usage could be an 'employee' template that is only allowed to have a parent page using a 'company-directory' template."); // parentTemplates option, notes
+		$field->icon = 'dedent';
 
 		$hasConflicts = false;
 		$hasSuccess = false;
@@ -1872,6 +1946,7 @@ class ProcessTemplate extends Process {
 		$field = $this->modules->get('InputfieldRadios'); 
 		$field->attr('name', 'slashUrls'); 
 		$field->label = $this->_('Should page URLs end with a slash?');
+		$field->icon = 'eye-slash';
 		$field->addOption(1, $this->labels['Yes']); 
 		if($template->name != 'admin') $field->addOption(0, $this->labels['No']); 
 		$field->description = $this->_("If 'Yes', pages using this template will always have URLs that end with a trailing slash '/'. And if the page is loaded from a URL without the slash, it will be redirected to it. If you select 'No', the non-slashed version will be enforced instead. Note that this setting does not enforce this behavior on URL segments or page numbers, only actual page URLs. If you don't have a preference, it is recommended that you leave this set to 'Yes'."); // URLs end with slash, description
@@ -1885,6 +1960,7 @@ class ProcessTemplate extends Process {
 		$field = $this->modules->get('InputfieldRadios'); 
 		$field->attr('name', 'https'); 
 		$field->label = $this->_('Scheme/Protocol');
+		$field->icon = 'shield';
 		$field->addOption(0, $this->_('HTTP or HTTPS')); 
 		$field->addOption(1, $this->_('HTTPS only (SSL encrypted)')); 
 		$field->addOption(-1, $this->_('HTTP only'));
@@ -2128,8 +2204,38 @@ class ProcessTemplate extends Process {
 		$field->attr('value', $template->noInherit ? 1 : 0);
 		$fieldset->add($field);
 
-
 		return $form; 
+	}
+
+	/**
+	 * Build the "pagefileSecure" field for the "access" tab
+	 * 
+	 * @param Template $template
+	 * @return InputfieldRadios
+	 * 
+	 */
+	protected function buildEditFormAccessFiles(Template $template) {
+
+		/** @var InputfieldRadios $f */
+		$f = $this->modules->get('InputfieldRadios');
+		$f->attr('id+name', 'pagefileSecure');
+		$f->label = $this->_('Prevent direct access to file assets owned by pages using this template?');
+		$f->icon = 'download';
+		$f->description =
+			$this->_('When direct access to a file in [u]/site/assets/files/[/u] is blocked, ProcessWire can manage delivery of the file, rather than Apache.') . ' ' .
+			$this->_('This enables the file to be access controlled in the same manner as the page that owns it, while still using the original file URL.') . ' ' .
+			$this->_('Note that it takes more overhead to deliver a file this way, so only choose the “Yes always” option if you need it.');
+		$f->notes =
+			$this->_('Always test that the access control is working how you expect by attempting to access the protected file(s) in your browser.') . ' ' .
+			$this->_('Do this for when you expect to have access (logged-in) and when you do not (logged-out).');
+		$f->addOption(0, $this->_('No') . ' ' . 
+			'[span.detail] ' . $this->_('(uses site-wide configuration instead)') . ' [/span]');
+		$f->addOption(1, $this->_('Yes when page is unpublished, in the trash, or not publicly accessible'));
+		$f->addOption(2, $this->_('Yes always, regardless of page status or access control'));
+		$f->val((int) $template->pagefileSecure);
+		if(!$template->pagefileSecure) $f->collapsed = Inputfield::collapsedYes;
+		
+		return $f;
 	}
 
 	/**
@@ -2141,9 +2247,11 @@ class ProcessTemplate extends Process {
 	 */
 	protected function buildEditFormAccessRoles(Template $template = null) {
 
+		$adminTheme = $this->wire()->adminTheme;
+		$checkboxClass = $adminTheme ? $adminTheme->getClass('input-checkbox') : '';
 		$roles = $this->pages->get($this->config->rolesPageID)->children(); 
 		$checked = "checked='checked' ";
-		$disabled = "<input type='checkbox' disabled='disabled' />";
+		$disabled = "<input class='$checkboxClass' type='checkbox' disabled='disabled' />";
 
 		/** @var InputfieldMarkup $field */
 		$field = $this->modules->get("InputfieldMarkup"); 
@@ -2179,10 +2287,14 @@ class ProcessTemplate extends Process {
 
 			$table->row(array(
 				$label,
-				("<input type='checkbox' id='roles_{$role->id}' class='viewRoles' name='roles[]' value='{$role->id}' " . ($template->roles->has($role) ? $checked : '') . " />"), 
-				($editable ? ("<input type='checkbox' class='editRoles' name='editRoles[]' value='{$role->id}' " . (in_array($role->id, $template->editRoles) ? $checked : '') . " />") : $disabled), 
-				($editable ? ("<input type='checkbox' class='createRoles' name='createRoles[]' value='{$role->id}' " . (in_array($role->id, $template->createRoles) ? $checked : '') . " />") : $disabled),
-				($editable ? ("<input type='checkbox' class='addRoles' name='addRoles[]' value='{$role->id}' " . (in_array($role->id, $template->addRoles) ? $checked : '') . " />") : $disabled)
+				("<input type='checkbox' id='roles_$role->id' class='viewRoles $checkboxClass' name='roles[]' value='$role->id' " . 
+					($template->roles->has($role) ? $checked : '') . " />"), 
+				($editable ? ("<input type='checkbox' class='editRoles $checkboxClass' name='editRoles[]' value='$role->id' " . 
+					(in_array($role->id, $template->editRoles) ? $checked : '') . " />") : $disabled), 
+				($editable ? ("<input type='checkbox' class='createRoles $checkboxClass' name='createRoles[]' value='$role->id' " . 
+					(in_array($role->id, $template->createRoles) ? $checked : '') . " />") : $disabled),
+				($editable ? ("<input type='checkbox' class='addRoles $checkboxClass' name='addRoles[]' value='$role->id' " . 
+					(in_array($role->id, $template->addRoles) ? $checked : '') . " />") : $disabled)
 				));
 		}
 
@@ -2455,6 +2567,9 @@ class ProcessTemplate extends Process {
 		$template->altFilename = basename($form->get('altFilename')->attr('value'), "." . $config->templateExtension);
 		$template->guestSearchable = (int) $form->get('guestSearchable')->attr('value');
 		$template->noInherit = (int) $form->get('noInherit')->attr('value') ? 1 : 0;
+		
+		$pagefileSecurePrev = (int) $template->pagefileSecure;
+		$template->pagefileSecure = (int) $input->post('pagefileSecure');
 
 		$pageLabelField = $form->get('pageLabelField')->attr('value');
 		if(strpos($pageLabelField, '{') !== false && strpos($pageLabelField, '}')) {
@@ -2665,6 +2780,23 @@ class ProcessTemplate extends Process {
 				}
 			}
 			unset($cloneTemplateName, $_cloneTemplateName);
+		}
+	
+		// change to the pagefileSecure setting
+		if($pagefileSecurePrev !== $template->pagefileSecure) {
+			$findSelector = "templates_id=$template->id, include=all";
+			$qty = $this->wire()->pages->count($findSelector);
+			if($qty < 1000) {
+				$qty = $template->checkPagefileSecure();
+				$this->message(sprintf($this->_('Renamed %d page file path(s) for change to secure files option'), $qty), Notice::noGroup);
+			} else {
+				$this->warning(
+					sprintf($this->_('Your change to the secure files option will be applied as file/image fields on each of the %d affected pages are accessed.'), $qty) . ' ' . 
+					$this->_('Note that this may take some time. To apply to all now, execute the following API code from a template file:') . ' ' . 
+					"`\$templates->get('$template->name')->checkPagefileSecure();`",
+					Notice::noGroup
+				); 
+			}
 		}
 
 		if(!$redirectUrl) $redirectUrl = "edit?id={$template->id}";
@@ -3150,6 +3282,163 @@ class ProcessTemplate extends Process {
 		
 		return $form->render();
 	}
+	
+	/**
+	 * Handle the “Manage Tags” actions
+	 *
+	 * @return string
+	 *
+	 */
+	public function ___executeTags() {
+
+		$input = $this->wire()->input;
+		$modules = $this->wire()->modules;
+		$templates = $this->wire()->templates;
+		$sanitizer = $this->wire()->sanitizer;
+		$form = $modules->get('InputfieldForm'); /** @var InputfieldForm $form */
+
+		$out = '';
+		$labels = $this->labels;
+		$headline = $labels['tags'];
+		$this->headline($headline);
+		$this->breadcrumb('../', $labels['templates']);
+
+		$templateNamesByTag = $templates->getTags(true);
+		$editTag = $input->get->name('edit_tag');
+		$saveTag = $input->post->name('save_tag');
+
+		$tags = array();
+		foreach(array_keys($templateNamesByTag) as $tag) {
+			$tags[$tag] = $tag;
+		}
+		
+		$collapsedTags = $modules->getConfig($this, 'collapsedTags');
+		if(!is_array($collapsedTags)) $collapsedTags = array();
+
+		if($editTag) {
+			// edit which fields are assigned to tag
+			$this->breadcrumb('./', $headline);
+			$this->headline("$labels[tags] - " . (isset($tags[$editTag]) ? $tags[$editTag] : $editTag));
+
+			/** @var InputfieldName $f */
+			$f = $modules->get('InputfieldName');
+			$f->attr('name', 'rename_tag');
+			$f->attr('value', isset($tags[$editTag]) ? $tags[$editTag] : $editTag);
+			$f->collapsed = Inputfield::collapsedYes;
+			$f->addClass('InputfieldIsSecondary', 'wrapClass');
+			$f->icon = 'tag';
+			$form->add($f);
+
+			/** @var InputfieldCheckboxes $f */
+			$f = $modules->get('InputfieldCheckboxes');
+			$f->attr('name', 'tag_templates');
+			$f->label = $this->_('Select all templates that should have this tag');
+			$f->table = true;
+			$f->icon = 'cubes';
+			$f->thead = "$labels[name]|$labels[label]|$labels[tags]";
+			$value = array();
+			foreach($templates as $template) {
+				/** @var Field $field */
+				if($template->flags & Template::flagSystem) continue;
+				$templateTags = $template->getTags();
+				$templateLabel = str_replace('|', ' ', $template->label);
+				$f->addOption($template->name, "**$template->name**|$templateLabel|" . implode(', ', $templateTags));
+				if(isset($templateTags[$editTag])) $value[] = $template->name;
+			}
+			$f->attr('value', $value);
+			$form->add($f);
+
+			/** @var InputfieldCheckbox */
+			$f = $modules->get('InputfieldCheckbox');
+			$f->attr('name', 'tag_collapsed');
+			$f->label = $this->_('Display as collapsed in templates list?');
+			if(in_array($editTag, $collapsedTags)) $f->attr('checked', 'checked');
+			$form->add($f);
+
+			/** @var InputfieldHidden $f */
+			$f = $modules->get('InputfieldHidden');
+			$f->attr('name', 'save_tag');
+			$f->attr('value', $editTag);
+			$form->appendMarkup = "<p class='detail'>" . wireIconMarkup('trash-o') . ' ' .
+				$this->_('To delete this tag, remove all templates from it.') . "</p>";
+			$form->add($f);
+
+		} else if($saveTag) {
+			// save tag
+			$tagTemplates = $sanitizer->names($input->post('tag_templates'));
+			$renameTag = $input->post->templateName('rename_tag');
+			$isCollapsed = (int) $input->post('tag_collapsed');
+			$removeTag = '';
+			if($renameTag && $renameTag != $saveTag) {
+				$removeTag = $saveTag;
+				$saveTag = $renameTag;
+			}
+			foreach($templates as $template) {
+				/** @var Template $template */
+				if($removeTag && $template->hasTag($removeTag)) {
+					$template->removeTag($removeTag);
+				}
+				if(is_array($tagTemplates) && in_array($template->name, $tagTemplates)) {
+					// template should have the given tag
+					if($template->hasTag($saveTag)) continue;
+					$template->addTag($saveTag);
+					$this->message(sprintf($this->_('Added tag “%1$s” to template: %2$s'), $saveTag, $template->name));
+				} else if($template->hasTag($saveTag)) {
+					// template should not have the given tag
+					$template->removeTag($saveTag);
+					$this->message(sprintf($this->_('Removed tag “%1$s” from template: %2$s'), $saveTag, $template->name));
+				}
+				if($template->isChanged('tags')) $template->save();
+			}
+			$_collapsedTags = $collapsedTags;
+			if($isCollapsed) {
+				if(!in_array($saveTag, $collapsedTags)) $collapsedTags[] = $saveTag;
+			} else {
+				$key = array_search($saveTag, $collapsedTags);
+				if($key !== false) unset($collapsedTags[$key]);
+			}
+			if($collapsedTags !== $_collapsedTags) {
+				$modules->saveConfig($this, 'collapsedTags', $collapsedTags);
+			}
+			$this->wire()->session->redirect('./');
+			return '';
+
+		} else {
+			// list defined tags
+			$out .= "<p class='description'>" . $this->_('Tags enable you to create collections of templates for listing.') . "</p>";
+			/** @var MarkupAdminDataTable $table */
+			$table = $modules->get('MarkupAdminDataTable');
+			$table->setSortable(false);
+			$table->setEncodeEntities(false);
+			$table->headerRow(array($labels['name'], $labels['templates']));
+
+			foreach($tags as $key => $tag) {
+				$table->row(array(
+					$tag => "./?edit_tag=$tag",
+					implode(', ', $templateNamesByTag[$tag])
+				));
+			}
+
+			if(count($tags)) $out .= $table->render();
+
+			$form->attr('method', 'get');
+			/** @var InputfieldName $f */
+			$f = $modules->get('InputfieldName');
+			$f->attr('name', 'edit_tag');
+			$f->label = $this->_('Add new tag');
+			$f->icon = 'tag';
+			$f->addClass('InputfieldIsSecondary', 'wrapClass');
+			$form->add($f);
+		}
+
+		$f = $modules->get('InputfieldSubmit');
+		$form->add($f);
+		$out .= $form->render();
+
+		return $out;
+	}
+
+
 
 	/**
 	 * Search for items containing $text and return an array representation of them
@@ -3250,6 +3539,14 @@ class ProcessTemplate extends Process {
 
 		return $result;
 	}
+	
+	/**
+	 * Build a form allowing configuration of this Module
+	 *
+	 * @param InputfieldWrapper $inputfields
+	 *
+	 */
+	public function getModuleConfigInputfields(InputfieldWrapper $inputfields) { }
 
 }
 

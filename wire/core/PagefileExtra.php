@@ -205,8 +205,7 @@ class PagefileExtra extends WireData {
 	 * 
 	 */
 	public function rename() {
-		if(!$this->exists()) return false;
-		if(!$this->filenamePrevious) return false;
+		if(!$this->filenamePrevious || !is_readable($this->filenamePrevious)) return false;
 		return $this->wire('files')->rename($this->filenamePrevious, $this->filename());
 	}
 
@@ -249,7 +248,7 @@ class PagefileExtra extends WireData {
 			case 'savingsPct':
 				$imageSize = $this->pagefile->filesize();
 				$extraSize = $this->filesize();
-				$value = round((($imageSize - $extraSize) / $imageSize) * 100) . '%';
+				$value = $imageSize ? round((($imageSize - $extraSize) / $imageSize) * 100) . '%' : '0%';
 				break;
 			case 'url':
 				$value = $this->url();

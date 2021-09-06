@@ -422,7 +422,7 @@ abstract class FieldtypeMulti extends Fieldtype {
 		if((int) $query->data('_limit') > 0) {
 			// accommodate paginated value by collecting and passing in pagination details from $query
 			// determine total number of results
-			$query->select('COUNT(*) as _total');
+			$query->set('select', array('COUNT(*) as _total'));
 			$query->set('limit', array()); // clear
 			$query->set('orderby', array()); // clear
 			$stmt = $query->prepare();
@@ -454,7 +454,8 @@ abstract class FieldtypeMulti extends Fieldtype {
 
 		$database = $this->wire('database');
 		$table = $database->escapeTable($field->table);
-		$schema = $this->trimDatabaseSchema($this->getDatabaseSchema($field));
+		$schemaAll = $this->getDatabaseSchema($field);
+		$schema = $this->trimDatabaseSchema($schemaAll);
 		$fieldName = $database->escapeCol($field->name);
 		$sanitizer = $this->wire('sanitizer');
 		$orderByCols = array();
@@ -476,12 +477,19 @@ abstract class FieldtypeMulti extends Fieldtype {
 			$query->data('_schema', $schema);
 			$query->data('_field', $field);
 			$query->data('_table', $table);
+			$query->data('_filters', $filters);
 			
 			foreach($filters as $selector) {
-				// @todo add support for OR values of $col or $value
-				$col = $sanitizer->fieldName($selector->field);
+				
+				$col = $selector->field;
 				$op = $selector->operator;
 				$value = $selector->value;
+			
+				if(is_array($col)) {
+					foreach($col as $k => $v) $col[$k] = $sanitizer->fieldName($v);
+				} else {
+					$col = $sanitizer->fieldName($col);
+				}
 				
 				if($col === 'sort') {
 					$desc = strpos($value, '-') === 0 ? '-' : '';
@@ -514,7 +522,7 @@ abstract class FieldtypeMulti extends Fieldtype {
 		if(empty($orderByCols)) {
 			// if there are no orderByCols defined, pagination & sorting not supported
 			// default sort for FieldtypeMulti fields is by column 'sort'
-			$query->orderby('sort');
+			if(isset($schemaAll['sort'])) $query->orderby("$table.sort");
 
 		} else {
 			// one or more orderByCols is defined, enabling sorting and potential pagination
@@ -650,17 +658,16 @@ abstract class FieldtypeMulti extends Fieldtype {
 		if(count($primaryKeys) !== 1) throw new WireException("savePageFieldRows() can only be used on fieldtypes with 1 primary key");
 		
 		$value = $this->setupPageFieldRows($page, $field, $value);
-		$database = $this->wire('database');
+		$database = $this->wire()->database;
 		$table = $database->escapeTable($info['table']);
 		$primaryKey = $database->escapeCol(reset($primaryKeys));
 		$hasInserts = false;
 		$sort = null;
 		$numSaved = 0;
+		$locked = false;
 		
 		// sleep the values for storage
 		$sleepValue = $this->sleepValue($page, $field, $value);
-
-		$this->lockForWriting($field);
 	
 		if(isset($schema['sort'])) {
 			// determine if there are any INSERTs and what the next sort value(s) should be
@@ -673,6 +680,8 @@ abstract class FieldtypeMulti extends Fieldtype {
 				if(isset($v['sort']) && $v['sort'] > $maxSort) $maxSort = $v['sort'];
 			}
 			if($hasInserts) {
+				// we will need a locked table for inserts
+				if(!$locked) $locked = $this->lockForWriting($field);
 				// determine max sort value for new items inserted
 				$sort = $this->getMaxColumnValue($page, $field, 'sort', -1);
 				if($maxSort > $sort) $sort = $maxSort;
@@ -717,11 +726,16 @@ abstract class FieldtypeMulti extends Fieldtype {
 			try {
 				if($query->execute()) $numSaved++;
 			} catch(\Exception $e) {
-				$this->error($e->getMessage(), $this->wire('user')->isSuperuser() ? Notice::logOnly : Notice::log);
+				$this->trackException($e, false);
+				if($this->wire()->user->isSuperuser()) {
+					$this->error($e->getMessage(), Notice::log);
+				} else {
+					$this->error($e->getMessage(), Notice::logOnly);
+				}
 			}
 		}
 	
-		$this->unlockForWriting();
+		if($locked) $this->unlockForWriting();
 
 		return $numSaved;
 	}
@@ -734,18 +748,27 @@ abstract class FieldtypeMulti extends Fieldtype {
 	 * 
 	 */
 	protected function lockForWriting(Field $field) {
-		$database = $this->wire('database');
+		
+		$database = $this->wire()->database;
 		$table = $database->escapeTable($field->getTable());
 		$locked = false;
-		try {
-			// attempt lock if possible
-			if($database->exec("LOCK TABLES `$table` WRITE") !== false) {
-				$this->lockedTable = true;
-				$locked = true;
+		$numAttempts = 0;
+		$maxAttempts = 100;
+		$lastException = null;
+		
+		do {
+			try {
+				// attempt lock if possible
+				if($database->exec("LOCK TABLES `$table` WRITE") !== false) {
+					$this->lockedTable = true;
+					$locked = true;
+				}
+			} catch(\Exception $e) {
+				$lastException = $e;
 			}
-		} catch(\Exception $e) {
-			// ignore
-		}
+		} while(!$locked && $numAttempts++ < $maxAttempts);
+		
+		if(!$locked && $lastException) $this->trackException($lastException, false);
 		
 		return $locked;
 	}
@@ -759,11 +782,11 @@ abstract class FieldtypeMulti extends Fieldtype {
 	protected function unlockForWriting() {
 		$result = false;
 		if($this->lockedTable) try {
-			$this->wire('database')->exec("UNLOCK TABLES");
+			$this->wire()->database->exec("UNLOCK TABLES");
 			$this->lockedTable = false;
 			$result = true;
 		} catch(\Exception $e) {
-			// ignore
+			$this->trackException($e, false);
 		}
 		return $result;
 	}
@@ -865,7 +888,7 @@ abstract class FieldtypeMulti extends Fieldtype {
 	 * @param string $subfield Name of the field (typically 'data', unless selector explicitly specified another)
 	 * @param string $operator The comparison operator
 	 * @param mixed $value The value to find
-	 * @return DatabaseQuery $query
+	 * @return PageFinderDatabaseQuerySelect|DatabaseQuerySelect $query
 	 *
 	 */
 	public function getMatchQuery($query, $table, $subfield, $operator, $value) {

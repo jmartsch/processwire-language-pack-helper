@@ -110,6 +110,7 @@ class CommentForm extends Wire implements CommentFormInterface {
 		),
 		'classes' => array(
 			'form' => '',
+			'wrapper' => '', // when specified, wrapper inside <form>...</form>
 			'label' => '',
 			'labelSpan' => '',
 			'cite' => 'CommentFormCite {id}_cite',
@@ -168,6 +169,9 @@ class CommentForm extends Wire implements CommentFormInterface {
 		
 		// When a comment is saved to a page, avoid updating the modified time/user
 		'quietSave' => false,
+	
+		// default value for the notify option (when used)
+		'notifyDefault' => 0, 
 	
 		// interial use: have options been initialized and are ready to use?
 		'_ready' => false, 
@@ -604,40 +608,52 @@ class CommentForm extends Wire implements CommentFormInterface {
 	 * 
 	 */
 	protected function renderFormNormal($id, $class, $attrs, $labels, $inputValues) {
+		
+		$classes = $this->options['classes'];
+		$tag = $this->options['inputWrapTag'];
+		$labelClass = $classes['label'] ? " class='$classes[label]'" : "";
+		
+		foreach($classes as $k => $v) {
+			$classes[$k] = str_replace('{id}', $id, $v); 
+		}
+		
+		$formClass = trim("$class $classes[form] CommentFormNormal"); 
+		
 		$form = 
-			"\n<form id='{$id}_form' class='$class CommentFormNormal' action='$attrs[action]#$id' method='$attrs[method]'>" .
-			"\n\t<p class='CommentFormCite {$id}_cite'>" .
-			"\n\t\t<label for='{$id}_cite'>$labels[cite]</label>" .
-			"\n\t\t<input type='text' name='cite' class='required' required='required' id='{$id}_cite' value='$inputValues[cite]' maxlength='128' />" .
-			"\n\t</p>" .
-			"\n\t<p class='CommentFormEmail {$id}_email'>" .
-			"\n\t\t<label for='{$id}_email'>$labels[email]</label>" .
-			"\n\t\t<input type='text' name='email' class='required email' required='required' id='{$id}_email' value='$inputValues[email]' maxlength='255' />" .
-			"\n\t</p>";
+			"<form id='{$id}_form' class='$formClass' action='$attrs[action]#$id' method='$attrs[method]'>" .
+				($classes['wrapper'] ? "<div class='$classes[wrapper]'>" : "") . 
+				"<$tag class='$classes[cite]'>" .
+					"<label$labelClass for='{$id}_cite'>$labels[cite]</label>" .
+					"<input type='text' name='cite' class='$classes[citeInput]' required='required' id='{$id}_cite' value='$inputValues[cite]' maxlength='128' />" .
+				"</$tag>" .
+				"<$tag class='$classes[email]'>" .
+					"<label$labelClass for='{$id}_email'>$labels[email]</label>" .
+					"<input type='text' name='email' class='$classes[emailInput]' required='required' id='{$id}_email' value='$inputValues[email]' maxlength='255' />" .
+				"</$tag>";
 
 		if($this->commentsField && $this->commentsField->useWebsite && $this->commentsField->schemaVersion > 0) {
 			$form .=
-				"\n\t<p class='CommentFormWebsite {$id}_website'>" .
-				"\n\t\t<label for='{$id}_website'>$labels[website]</label>" .
-				"\n\t\t<input type='text' name='website' class='website' id='{$id}_website' value='$inputValues[website]' maxlength='255' />" .
-				"\n\t</p>";
+				"<$tag class='$classes[website]'>" .
+					"<label$labelClass for='{$id}_website'>$labels[website]</label>" .
+					"<input type='text' name='website' class='$classes[websiteInput]' id='{$id}_website' value='$inputValues[website]' maxlength='255' />" .
+				"</$tag>";
 		}
 
 		if($this->commentsField->useStars && $this->commentsField->schemaVersion > 5) {
 			$commentStars = new CommentStars();
-			$starsClass = 'CommentFormStars';
+			$starsClass = $classes['stars'];
 			if($this->commentsField->useStars > 1) {
 				$starsNote = $labels['starsRequired'];
-				$starsClass .= ' CommentFormStarsRequired';
+				$starsClass = trim("$starsClass $classes[starsRequired]"); 
 			} else {
 				$starsNote = '';
 			}
 			$form .=
-				"\n\t<p class='$starsClass {$id}_stars' data-note='$starsNote'>" .
-				($labels['stars'] ? "\n\t\t<label for='{$id}_stars'>$labels[stars]</label>" : "") .
-				"\n\t\t<input type='number' name='stars' id='{$id}_stars' value='$inputValues[stars]' min='0' max='5' />" .
-				"\n\t\t" . $commentStars->render(0, true) .
-				"\n\t</p>";
+				"<$tag class='$starsClass' data-note='$starsNote'>" .
+					($labels['stars'] ? "<label$labelClass for='{$id}_stars'>$labels[stars]</label>" : "") .
+					"<input type='number' name='stars' id='{$id}_stars' value='$inputValues[stars]' min='0' max='5' />" .
+						$commentStars->render(0, true) .
+				"</$tag>";
 		}
 
 		// do we need to show the honeypot field?
@@ -646,23 +662,24 @@ class CommentForm extends Wire implements CommentFormInterface {
 			$honeypotLabel = isset($labels[$honeypot]) ? $labels[$honeypot] : '';
 			$honeypotValue = isset($inputValues[$honeypot]) ? $inputValues[$honeypot] : '';
 			$form .=
-				"\n\t<p class='CommentFormHP {$id}_hp'>" .
-				"\n\t\t<label for='{$id}_$honeypot'>$honeypotLabel</label>" .
-				"\n\t\t<input type='text' id='{$id}_$honeypot' name='$honeypot' value='$honeypotValue' size='3' />" .
-				"\n\t</p>";
+				"<$tag class='$classes[honeypot]'>" .
+					"<label$labelClass for='{$id}_$honeypot'>$honeypotLabel</label>" .
+					"<input type='text' id='{$id}_$honeypot' name='$honeypot' value='$honeypotValue' size='3' />" .
+				"</$tag>";
 		}
 
 		$form .=
-			"\n\t<p class='CommentFormText {$id}_text'>" .
-			"\n\t\t<label for='{$id}_text'>$labels[text]</label>" .
-			"\n\t\t<textarea name='text' class='required' required='required' id='{$id}_text' rows='$attrs[rows]' cols='$attrs[cols]'>$inputValues[text]</textarea>" .
-			"\n\t</p>" . 
-			$this->renderNotifyOptions() . 
-			"\n\t<p class='CommentFormSubmit {$id}_submit'>" .
-			"\n\t\t<button type='submit' name='{$id}_submit' id='{$id}_submit' value='1'>$labels[submit]</button>" .
-			"\n\t\t<input type='hidden' name='page_id' value='{$this->page->id}' />" .
-			"\n\t</p>" .
-			"\n</form>";
+				"<$tag class='$classes[text]'>" .
+					"<label$labelClass for='{$id}_text'>$labels[text]</label>" .
+					"<textarea name='text' class='$classes[textInput]' required='required' id='{$id}_text' rows='$attrs[rows]' cols='$attrs[cols]'>$inputValues[text]</textarea>" .
+				"</$tag>" . 
+				$this->renderNotifyOptions() . 
+				"<$tag class='$classes[submit]'>" .
+					"<button type='submit' name='{$id}_submit' id='{$id}_submit' class='$classes[submitButton]' value='1'>$labels[submit]</button>" .
+					"<input type='hidden' name='page_id' value='{$this->page->id}' />" .
+				"</$tag>" .
+				($classes['wrapper'] ? "</div>" : "") . 
+			"</form>";
 		
 		return $form; 
 	}
@@ -786,6 +803,7 @@ class CommentForm extends Wire implements CommentFormInterface {
 		if(!$this->commentsField->useNotify) return '';
 		$out = '';
 		$tag = $this->options['inputWrapTag'];
+		$notifyDefault = (int) $this->options['notifyDefault'];
 		
 		$options = array();
 		
@@ -808,16 +826,25 @@ class CommentForm extends Wire implements CommentFormInterface {
 		foreach($classes as $key => $value) {
 			$classes[$key] = $value ? " class='" . trim($value) . "'" : "";
 		}
+	
+		$checked = "checked='checked' ";
+		$checkedNotify = array(
+			0 => ($notifyDefault === 0 ? $checked : ''),
+			Comment::flagNotifyAll => ($notifyDefault === Comment::flagNotifyAll ? $checked : ''),
+			Comment::flagNotifyReply => ($notifyDefault === Comment::flagNotifyReply ? $checked : ''), 
+		);
 		
 		if(count($options)) {
+			$checked = $checkedNotify[0];
 			$out = 
 				"\n\t<$tag$classes[notify]>" . 
 				"\n\t\t<label$classes[label]><span$classes[labelSpan]>" . $this->labels('notify') . "</span></label> " . 
-				"\n\t\t<label$classes[radioLabel]><input$classes[radioInput] type='radio' name='notify' checked='checked' value='0' /> " . $this->labels('notifyOff') . "</label> ";
+				"\n\t\t<label$classes[radioLabel]><input$classes[radioInput] type='radio' name='notify' value='0' $checked/> " . $this->labels('notifyOff') . "</label> ";
 			
 			foreach($options as $value => $label) {
+				$checked = $checkedNotify[(int)$value];
 				$label = str_replace(' ', '&nbsp;', $label); 
-				$out .= "\n\t\t<label$classes[radioLabel]><input$classes[radioInput] type='radio' name='notify' value='$value' /> $label</label> ";
+				$out .= "\n\t\t<label$classes[radioLabel]><input$classes[radioInput] type='radio' name='notify' value='$value' $checked/> $label</label> ";
 			}
 			$out .= "\n\t</$tag>";
 		}
@@ -848,7 +875,7 @@ class CommentForm extends Wire implements CommentFormInterface {
 
 		/** @var Comment $comment */
 		$comment = $this->wire(new Comment()); 
-		$comment->user_agent = $_SERVER['HTTP_USER_AGENT']; 
+		$comment->user_agent = isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : ''; 
 		$comment->ip = $this->wire('session')->getIP();
 		$comment->created_users_id = $this->user->id; 
 		//$comment->sort = count($this->comments)+1; 
@@ -859,7 +886,13 @@ class CommentForm extends Wire implements CommentFormInterface {
 			if($parent) {
 				// validate that depth is in allowed limit
 				$parents = $this->commentsField->getCommentParents($this->page, $comment); 
-				if($parents->count() >= $maxDepth) $comment->parent_id = 0;
+				if($parents->count() > $maxDepth) {
+					if($parent->parent_id) {
+						$comment->parent_id = $parent->parent_id;
+					} else {
+						$comment->parent_id = 0;
+					}
+				}
 			} else {
 				// parent does not exist on this page
 				$comment->parent_id = 0;

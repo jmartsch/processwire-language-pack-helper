@@ -463,6 +463,10 @@ class WireTextTools extends Wire {
 	 *
 	 */
 	function truncate($str, $maxLength, $options = array()) {
+		
+		if(!strlen($str)) return '';
+
+		$ent = __(true, 'entityEncode', false);
 
 		$defaults = array(
 			'type' => 'word', // word, punctuation, sentence, or block
@@ -480,8 +484,8 @@ class WireTextTools extends Wire {
 			'noEndSentence' => $this->_('Mr. Mrs. Ms. Dr. Hon. PhD. i.e. e.g.'), // When in sentence type, words that do not end the sentence (space-separated)
 		);
 
-		if(!strlen($str)) return '';
-
+		if($ent) __(true, 'entityEncode', $ent);
+		
 		if(is_string($options) && ctype_alpha($options)) {
 			$defaults['type'] = $options;
 			$options = array();
@@ -591,7 +595,7 @@ class WireTextTools extends Wire {
 				$pos = array_pop($tests);
 				$result = trim($this->substr($str, 0, $pos + 1));
 				$lastChar = $this->substr($result, -1);
-				$result = rtrim($result, $options['trim']);
+				$result = $this->rtrim($result, $options['trim']);
 
 				if($type === 'sentence' || $type === 'block') {
 					// good to go with result as is
@@ -604,7 +608,7 @@ class WireTextTools extends Wire {
 						if(in_array($c, $endSentenceChars)) continue;
 						$trims .= $c;
 					}
-					$result = rtrim($result, $trims) . $options['more'];
+					$result = $this->rtrim($result, $trims) . $options['more'];
 				} else {
 					$result .= $options['more'];
 				}
@@ -617,7 +621,7 @@ class WireTextTools extends Wire {
 			}
 		} else {
 			// if we didn't find any place to truncate, just return exact truncated string
-			$result = trim($str, $options['trim']) . $options['more'];
+			$result = $this->trim($str, $options['trim']) . $options['more'];
 		}
 		
 		if(strlen($options['more'])) {
@@ -711,11 +715,13 @@ class WireTextTools extends Wire {
 	 * 
 	 */
 	public function getPunctuationChars($sentence = false) {
+		$ent = __(true, 'entityEncode', false);
 		if($sentence) {
 			$s = $this->_('. ? !'); // Sentence ending punctuation characters (must be space-separated)
 		} else {
 			$s = $this->_(', : . ? ! “ ” „ " – -- ( ) [ ] { } « »'); // All punctuation characters (must be space-separated)
 		}
+		if($ent) __(true, 'entityEncode', $ent);
 		return explode(' ', $s); 
 	}
 
@@ -919,11 +925,11 @@ class WireTextTools extends Wire {
 	 * @param WireData|object|array $vars Object or associative array to pull replacement values from.
 	 * @param array $options Array of optional changes to default behavior, including:
 	 * 	- `tagOpen` (string): The required opening tag character(s), default is '{'
-	 *	- `tagClose` (string): The optional closing tag character(s), default is '}'
-	 *	- `recursive` (bool): If replacement value contains tags, populate those too? (default=false)
-	 *	- `removeNullTags` (bool): If a tag resolves to a NULL, remove it? If false, tag will remain. (default=true)
-	 *	- `entityEncode` (bool): Entity encode the values pulled from $vars? (default=false)
-	 *	- `entityDecode` (bool): Entity decode the values pulled from $vars? (default=false)
+	 *  - `tagClose` (string): The optional closing tag character(s), default is '}'
+	 *  - `recursive` (bool): If replacement value contains tags, populate those too? (default=false)
+	 *  - `removeNullTags` (bool): If a tag resolves to a NULL, remove it? If false, tag will remain. (default=true)
+	 *  - `entityEncode` (bool): Entity encode the values pulled from $vars? (default=false)
+	 *  - `entityDecode` (bool): Entity decode the values pulled from $vars? (default=false)
 	 *  - `allowMarkup` (bool): Allow markup to appear in populated variables? (default=true)
 	 * @return string String with tags populated.
 	 * @since 3.0.126 Use wirePopulateStringTags() function for older versions
@@ -986,6 +992,125 @@ class WireTextTools extends Wire {
 		}
 
 		return $str; 
+	}
+	
+	/**
+	 * Populate placeholders in string with sanitizers applied to populated values
+	 * 
+	 * These placeholders accept one or more sanitizer names as part `{placeholder}` in the format `{placeholder:sanitizers}`,
+	 * where `placeholder` is the name of a variable accessible from `$data` argument and `sanitizers` is the name of a 
+	 * sanitizer method or a CSV string of sanitizer methods. Placeholders with any whitespace are ignored.
+	 * 
+	 * #pw-internal 
+	 * 
+	 * ~~~~~
+	 * $tools = $sanitizer->getTextTools();
+	 * $data = [ 'name' => 'John <Bob> Smith', 'age' => 46.5 ];
+	 * 
+	 * $str = "My name is {name:camelCase}, my age is {age:int}";
+	 * echo $tools->placeholderSanitizers($str, $data); // outputs: My name is johnBobSmith, my age is 46
+	 * 
+	 * $str = "My name is {name:removeWhitespace,entities}, my age is {age:float}";
+	 * echo $tools->placeholderSanitizers($str, $data); // outputs: My name is John&lt;Bob&gt;Smith, my age is 46.5
+	 * 
+	 * $str = "My name is {name:text,word}, my age is {age:digits}";
+	 * echo $tools->placeholderSanitizers($str, $data); // outputs: My name is John, my age is 465
+	 * ~~~~~
+	 * 
+	 * @param string $str
+	 * @param array|WireData|WireInputData 
+	 * @param array $options
+	 * @return string
+	 * @throws WireException
+	 * @since 3.0.178
+	 * @todo currently 'protected' for later use
+	 *
+	 */
+	protected function placeholderSanitizers($str, $data, array $options = array()) {
+		
+
+		$defaults = array(
+			'tagOpen' => '{', 
+			'tagClose' => '}', 
+			'sanitizersBefore' => array('string'), // sanitizers to apply before requested ones
+			'sanitizersAfter' => array(), // sanitizers to apply after requested ones
+			'sanitizersDefault' => array('text'), // defaults if only {var} is presented without {var:sanitizer}
+		);
+		
+
+		$options = array_merge($defaults, $options);
+		$sanitizer = $this->wire()->sanitizer;
+		$dataIsArray = is_array($data);
+		$replacements = array();
+		$parts = array();
+		
+		if(strpos($str, $options['tagOpen']) === false || !strpos($str, $options['tagClose'])) return $str;
+		
+		if(!is_array($data) && !$data instanceof WireData && !$data instanceof WireInputData) {
+			throw new WireException('$data argument must be associative array, WireData or WireInputData');
+		}
+	
+		list($tagOpen, $tagClose) = array(preg_quote($options['tagOpen']), preg_quote($options['tagClose'])); 
+		
+		$regex = '/OPEN([-_.a-z0-9]+)(:[_,a-z0-9]+CLOSE|CLOSE)/i';
+		$regex = str_replace(array('OPEN', 'CLOSE'), array($tagOpen, $tagClose), $regex); 
+		if(!preg_match_all($regex, $str, $matches)) return $str;
+
+		foreach($matches[0] as $key => $placeholder) {
+			$varName = $matches[1][$key];
+			$sanitizers = trim($matches[2][$key], ':}');
+			$sanitizers = strlen($sanitizers) ? explode(',', $sanitizers) : array();
+			if(!count($sanitizers)) $sanitizers = $options['sanitizersDefault'];
+			if($dataIsArray) {
+				/** @var array $data */
+				$value = isset($data[$varName]) ? $data[$varName] : null;
+			} else {
+				/** @var WireData|WireInputData $data */
+				$value = $data->get($varName);
+			}
+			$n = 0;
+			foreach(array($options['sanitizersBefore'], $sanitizers, $options['sanitizersAfter']) as $methods) {
+				foreach($methods as $method) {
+					if(!$sanitizer->methodExists($method)) throw new WireException("Unknown sanitizer method: $method");
+					$value = $sanitizer->sanitize($value, $method);
+					$n++;
+				}
+			}
+			if(!$n) $value = $placeholder;
+			$replacements[] = array($placeholder, $value);
+		}
+
+		// piece it back together manually so values in $data cannot introduce more placeholders
+		foreach($replacements as $item) {
+			list($placeholder, $value) = $item;
+			list($before, $after) = explode($placeholder, $str, 2);
+			$parts[] = $before . $value;
+			$str = $after;
+		}
+
+		return implode('', $parts) . $str;
+	}
+
+	/**
+	 * Populate placeholders with optional sanitizers in a selector string
+	 * 
+	 * #pw-internal
+	 * 
+	 * @param string $selectorString
+	 * @param array|WireData|WireInputData
+	 * @param array $options
+	 * @return string
+	 * @throws WireException
+	 * @since 3.0.178
+	 * @todo currently 'protected' for later use
+	 * 
+	 */
+	protected function placeholderSelector($selectorString, $data, array $options = array()) {
+		if(!isset($options['sanitizersBefore'])) $options['sanitizersBefore'] = array();
+		if(!isset($options['sanitizersAfter'])) $options['sanitizersAfter'] = array();
+		$options['sanitizersBefore'][] = 'text';
+		$options['sanitizersAfter'][] = 'selectorValue';
+		return $this->placeholderSanitizers($selectorString, $data, $options);
 	}
 
 	/**
@@ -1392,7 +1517,39 @@ class WireTextTools extends Wire {
 	 */
 	public function trim($str, $chars = '') {
 		if(!$this->mb) return $chars === '' ? trim($str) : trim($str, $chars);
-		return $this->wire('sanitizer')->trim($str, $chars);
+		return $this->wire()->sanitizer->trim($str, $chars);
+	}
+
+	/**
+	 * Strip whitespace (or other characters) from the beginning of string only (aka left trim)
+	 *
+	 * #pw-group-PHP-function-alternates
+	 *
+	 * @param string $str
+	 * @param string $chars Omit for default
+	 * @return string
+	 * @since 3.0.168
+	 *
+	 */
+	public function ltrim($str, $chars = '') {
+		if(!$this->mb) return $chars === '' ? ltrim($str) : ltrim($str, $chars);
+		return $this->wire()->sanitizer->trim($str, $chars, 'ltrim');
+	}
+	
+	/**
+	 * Strip whitespace (or other characters) from the end of string only (aka right trim)
+	 *
+	 * #pw-group-PHP-function-alternates
+	 *
+	 * @param string $str
+	 * @param string $chars Omit for default
+	 * @return string
+	 * @since 3.0.168
+	 *
+	 */
+	public function rtrim($str, $chars = '') {
+		if(!$this->mb) return $chars === '' ? rtrim($str) : rtrim($str, $chars);
+		return $this->wire()->sanitizer->trim($str, $chars, 'rtrim');
 	}
 	
 

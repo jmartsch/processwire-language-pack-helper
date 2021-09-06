@@ -9,7 +9,7 @@
  * /wire/core/Fieldtype.php
  * /wire/core/FieldtypeMulti.php
  * 
- * ProcessWire 3.x, Copyright 2016 by Ryan Cramer
+ * ProcessWire 3.x, Copyright 2020 by Ryan Cramer
  * https://processwire.com
  *
  */
@@ -34,6 +34,7 @@ require_once($dirname . "/CommentField.php");
  * @method void commentUnapproved(Page $page, Field $field, Comment $comment, $notes = '') #pw-hooker
  * @method void commentAddReady(Page $page, Field $field, Comment $comment) #pw-hooker
  * @method void commentAdded(Page $page, Field $field, Comment $comment) #pw-hooker
+ * @method int sendNotifyEmails(Page $page, Field $field, Comment $comment, array $emailsData)
  * 
  *
  */
@@ -74,10 +75,10 @@ class FieldtypeComments extends FieldtypeMulti {
 	public static function getModuleInfo() {
 		return array(
 			'title' => __('Comments', __FILE__),
-			'version' => 108,
+			'version' => 109,
 			'summary' => __('Field that stores user posted comments for a single Page', __FILE__),
 			'installs' => array('InputfieldCommentsAdmin'),
-			);
+		);
 	}
 	
 	public function wired() {
@@ -119,7 +120,7 @@ class FieldtypeComments extends FieldtypeMulti {
 	/**
 	 * Update a query to match the text with a fulltext index
 	 * 
-	 * @param DatabaseQuerySelect $query
+	 * @param PageFinderDatabaseQuerySelect $query
 	 * @param string $table
 	 * @param string $subfield
 	 * @param string $operator
@@ -297,17 +298,15 @@ class FieldtypeComments extends FieldtypeMulti {
 	protected function checkCommentCodes(Comment $comment) {
 		// assign code and subcode
 		if(!$comment->code || !$comment->subcode) {
-			$pass = $this->wire(new Password());
+			$rand = new WireRandom();
 			if(!strlen($comment->code)) {
 				// code: visible to admin only
-				$code = $pass->randomBase64String(128, true);
-				$code = substr($this->wire('sanitizer')->fieldName($code), 0, 128);
+				$code = $rand->alphanumeric(128);
 				$comment->code = $code;
 			}
 			if(!strlen($comment->subcode)) {
 				// subcode: may be visible to commenter
-				$subcode = $pass->randomBase64String(40, true);
-				$subcode = substr($this->wire('sanitizer')->fieldName($subcode), 0, 40);
+				$subcode = $rand->alphanumeric(40);
 				$comment->subcode = $subcode;
 			}
 		}
@@ -324,7 +323,9 @@ class FieldtypeComments extends FieldtypeMulti {
 	 */ 
 	protected function checkNewComment(Page $page, Field $field, Comment $comment) {
 
+		if($page) {} // ignore
 		if($comment->id || $comment->quiet()) return;
+		$comment->isNew = true;
 		
 		$this->checkCommentCodes($comment);
 		
@@ -340,7 +341,7 @@ class FieldtypeComments extends FieldtypeMulti {
 		if($comment->status != Comment::statusSpam) {
 			if($field->get('moderate') == self::moderateNone) {
 				$comment->status = Comment::statusApproved; 
-				$this->commentApproved($page, $field, $comment, 'New comment approved / moderation is off'); 
+				$comment->approvalNote = 'New comment approved / moderation is off';
 
 			} else if($field->get('moderate') == self::moderateNew && $comment->email) {
 				$database = $this->wire('database');
@@ -352,17 +353,12 @@ class FieldtypeComments extends FieldtypeMulti {
 				$numApproved = (int) $query->fetchColumn();
 					
 				if($numApproved > 0) {
+					$cite = $this->wire('sanitizer')->text($comment->cite); 
 					$comment->status = Comment::statusApproved;
-					$cite = $this->wire('sanitizer')->name($comment->cite); 
-					$this->commentApproved($page, $field, $comment, "New comment auto-approved because user '$cite' has other approved comments"); 
+					$comment->approvalNote = "New comment auto-approved because user '$cite' has other approved comments";
 				}
 			}
 		}
-
-		require_once(dirname(__FILE__) . '/CommentNotifications.php'); 
-		$no = $this->wire(new CommentNotifications($page, $field)); 
-		$no->sendAdminNotificationEmail($comment); 
-		$this->commentMaintenance($field);
 	}
 
 	/**
@@ -403,8 +399,10 @@ class FieldtypeComments extends FieldtypeMulti {
 	 *
 	 */
 	public function getDatabaseSchema(Field $field) {
+		
+		$database = $this->wire()->database;
 
-		$maxIndexLength = $this->wire('database')->getMaxIndexLength();
+		$maxIndexLength = $database->getMaxIndexLength();
 		$websiteSchema = "varchar($maxIndexLength) NOT NULL default ''"; 
 		$parentSchema = "int unsigned NOT NULL default 0";
 		$flagSchema = "int unsigned NOT NULL default 0";
@@ -415,13 +413,13 @@ class FieldtypeComments extends FieldtypeMulti {
 		$upvoteSchema = "int unsigned NOT NULL default 0";
 		$downvoteSchema = "int unsigned NOT NULL default 0";
 		$starsSchema = "tinyint unsigned default NULL";
+		$ipSchema = "varchar(45) NOT NULL default ''";
 		
 		$schemaVersion = (int) $field->get('schemaVersion');
 		$updateSchema = true;
 
 		if(!$schemaVersion) {
 			// add website field for PW 2.3+ 
-			$database = $this->wire('database');
 			$table = $database->escapeTable($field->getTable());
 			try { 
 				$database->query("ALTER TABLE `$table` ADD website $websiteSchema");
@@ -433,7 +431,6 @@ class FieldtypeComments extends FieldtypeMulti {
 		
 		if($schemaVersion < 2) {
 			// add parent_id and flags columns
-			$database = $this->wire('database');
 			$table = $database->escapeTable($field->getTable());
 			try { 
 				$database->query("ALTER TABLE `$table` ADD parent_id $parentSchema");
@@ -446,7 +443,6 @@ class FieldtypeComments extends FieldtypeMulti {
 		
 		if($schemaVersion < 3) {
 			// add code column (admin code)
-			$database = $this->wire('database');
 			$table = $database->escapeTable($field->getTable());
 			try {
 				$database->query("ALTER TABLE `$table` ADD `code` $codeSchema");
@@ -459,7 +455,6 @@ class FieldtypeComments extends FieldtypeMulti {
 		
 		if($schemaVersion < 4) {
 			// add subcode column (subscriber code)
-			$database = $this->wire('database');
 			$table = $database->escapeTable($field->getTable());
 			try {
 				$database->query("ALTER TABLE `$table` ADD `subcode` $subcodeSchema");
@@ -472,7 +467,6 @@ class FieldtypeComments extends FieldtypeMulti {
 		
 		if($schemaVersion < 5 && $updateSchema) {
 			// add upvote/downvote columns 
-			$database = $this->wire('database');
 			$table = $database->escapeTable($field->getTable());
 			$parentSchema = parent::getDatabaseSchema($field);
 			try {
@@ -481,7 +475,7 @@ class FieldtypeComments extends FieldtypeMulti {
 					`comment_id` int unsigned NOT NULL,
 					`vote` tinyint NOT NULL, 
 					`created` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, 
-					`ip` VARCHAR(15) NOT NULL default '', 
+					`ip` $ipSchema, 
 					`user_id` int unsigned NOT NULL default 0, 
 					PRIMARY KEY (`comment_id`, `ip`, `vote`), 
 					INDEX `created` (`created`)
@@ -510,7 +504,6 @@ class FieldtypeComments extends FieldtypeMulti {
 		}
 
 		if($schemaVersion < 6 && $updateSchema) {
-			$database = $this->wire('database');
 			$table = $database->escapeTable($field->getTable());
 			try {
 				$database->query("ALTER TABLE `$table` ADD `stars` $starsSchema");
@@ -524,6 +517,17 @@ class FieldtypeComments extends FieldtypeMulti {
 				}
 			}
  		}
+ 		
+ 		if($schemaVersion < 7 && $updateSchema) {
+		    $table = $database->escapeTable($field->getTable());
+		    try {
+			    $database->query("ALTER TABLE `$table` MODIFY `ip` $ipSchema");
+			    $database->query("ALTER TABLE `{$table}_votes` MODIFY `ip` $ipSchema");
+			    $schemaVersion = 7;
+		    } catch(\Exception $e) {
+		    	$this->error($e->getMessage(), Notice::debug);
+		    }
+	    }
 
  		$_schemaVersion = (int) $field->get('schemaVersion');
 		if($_schemaVersion < $schemaVersion) {
@@ -542,7 +546,7 @@ class FieldtypeComments extends FieldtypeMulti {
 		$schema['sort'] = "int unsigned NOT NULL";
 		$schema['created'] = "int unsigned NOT NULL"; 	
 		$schema['created_users_id'] = "int unsigned NOT NULL";
-		$schema['ip'] = "varchar(15) NOT NULL default ''";
+		$schema['ip'] = $ipSchema;
 		$schema['user_agent'] = "varchar($maxIndexLength) NOT NULL default ''";
 
 		$schemaVersion = $field->get('schemaVersion');
@@ -794,6 +798,18 @@ class FieldtypeComments extends FieldtypeMulti {
 		$f->addOption(Comment::flagNotifyReply, $this->_('Users can receive email notifications of replies to their comment only'));
 		$f->addOption(Comment::flagNotifyAll, $this->_('Users can receive email notifications for all new comments on the page'));
 		$f->attr('value', (int) $field->get('useNotify'));
+		$f->columnWidth = 50;
+		$fieldset->append($f);
+		
+		$name = 'useNotifyText';
+		$f = $this->wire('modules')->get('InputfieldCheckbox');
+		$f->attr('name', $name);
+		$f->attr('value', 1);
+		if($field->$name) $f->attr('checked', 'checked');
+		$f->label = $this->_('Allow comment text in notifications?');
+		$f->description = $this->_('When checked, the entire comment text will also appear in the notification emails, rather than just a link to it.');
+		$f->columnWidth = 50;
+		$f->showIf = 'useNotify>0';
 		$fieldset->append($f);
 
 		// ---------------------------------------
@@ -1065,6 +1081,7 @@ class FieldtypeComments extends FieldtypeMulti {
 		$intColumns = array(
 			'id', 
 			'status', 
+			'flags',
 			'created', 
 			'pages_id', 
 			'parent_id', 
@@ -1148,6 +1165,23 @@ class FieldtypeComments extends FieldtypeMulti {
 				} else if($operator === '!=') {
 					$wheres[] = "($table.$f!=0 OR $table.$f IS NOT NULL)";
 				}
+				
+			} else if($f === 'flags') {
+				if(!is_array($value)) $value = array($value);
+				$whereFlags = array();
+				if(!in_array($operator, array('=', '!=', '&'))) {
+					throw new WireException("Operator $operator not supported for comment flags");
+				}
+				foreach($value as $flag) {
+					$intFlag = (int) $flag;
+					if($operator === '!=') {
+						$whereFlags[] = "(NOT $table.flags & $intFlag)";
+					} else {
+						$whereFlags[] = "($table.flags & $intFlag)";
+					}
+				}
+				$andOr = $operator === '!=' ? ' AND ' : ' OR ';
+				$wheres[] = '(' . implode($andOr, $whereFlags) . ')';
 
 			} else if(in_array($f, $intColumns)) {
 				if(!$database->isOperator($operator)) $operator = '=';
@@ -1484,16 +1518,21 @@ class FieldtypeComments extends FieldtypeMulti {
 	 */
 	public function ___updateComment(Page $page, $field, Comment $comment, array $properties) {
 		if(!count($properties)) return false;
+		
 		$commentID = $comment->id; 
-		if(!is_object($field)) $field = $this->wire('fields')->get($this->wire('sanitizer')->fieldName($field)); 
+		$database = $this->wire()->database;
+		$sanitizer = $this->wire()->sanitizer;
+		$fields = $this->wire()->fields;
+		
+		if(!is_object($field)) $field = $fields->get($sanitizer->fieldName($field)); 
 		if(!$field instanceof Field) return false;
-		$table = $this->wire('database')->escapeTable($field->getTable());
+		$table = $database->escapeTable($field->getTable());
 		$sql = "UPDATE `$table` SET ";
 		$values = array();
 		foreach($properties as $property => $value) {
 			$comment->set($property, $value); 
-			$property = $this->wire('sanitizer')->fieldName($property); 
-			$property = $this->wire('database')->escapeCol($property); 
+			$property = $sanitizer->fieldName($property); 
+			$property = $database->escapeCol($property); 
 			if($property == 'text') $property = 'data';
 			if(is_null($value) && ($property == 'code' || $property == 'subcode')) {
 				$sql .= "`$property`=NULL, ";
@@ -1503,20 +1542,23 @@ class FieldtypeComments extends FieldtypeMulti {
 			}
 		}
 		$sql = rtrim($sql, ', ') . " WHERE id=:commentID AND pages_id=:pageID";
-		$query = $this->wire('database')->prepare($sql); 
+		$query = $database->prepare($sql); 
 		$query->bindValue(':commentID', $commentID, \PDO::PARAM_INT);
 		$query->bindValue(':pageID', $page->id, \PDO::PARAM_INT); 
 		foreach($values as $property => $value) {
 			$query->bindValue(":$property", $value); 
 		}
-		$this->wire('pages')->saveFieldReady($page, $field);
 		try {
+			$this->triggerPageFieldSaveReady($page, $field);
 			$result = $query->execute();
-			$this->wire('pages')->savedField($page, $field); 
+			$this->triggerPageFieldSaved($page, $field);
 		} catch(\Exception $e) {
 			$result = false;
-			if($this->wire('config')->debug) $this->error($e->getMessage(), Notice::log); 
-				else $this->wire('log')->error($e->getMessage()); 
+			if($this->wire()->config->debug) {
+				$this->error($e->getMessage(), Notice::log);
+			} else {
+				$this->wire()->log->error($e->getMessage());
+			}
 		}
 		if($result) { 
 			$this->checkExistingComment($page, $field, $comment); 
@@ -1562,6 +1604,7 @@ class FieldtypeComments extends FieldtypeMulti {
 		$sets = array('pages_id=:pages_id');
 		$binds = array('pages_id' => (int) $page->id);
 		$nextSort = $this->getMaxSort($page, $field) + 1;
+		$approved = $comment->isApproved();
 		$comment->quiet(!$send); 
 
 		if(!$comment->sort) $comment->sort = $nextSort;
@@ -1577,6 +1620,8 @@ class FieldtypeComments extends FieldtypeMulti {
 		// convert CommentArray to sleep value array
 		$value = $this->sleepValue($page, $field, $commentArray);
 		if(!count($value)) return false;
+		
+		if($approved) $this->triggerPageFieldSaveReady($page, $field); 
 		
 		// use just first item, since only 1 comment
 		$value = $value[0]; 
@@ -1628,6 +1673,7 @@ class FieldtypeComments extends FieldtypeMulti {
 			// add to loaded CommentArray for page, but only if it is already loaded in memory
 			if($comments && $comments instanceof CommentArray) $comments->add($comment); 
 			$this->commentAdded($page, $field, $comment);
+			if($approved) $this->triggerPageFieldSaved($page, $field); 
 		} else {
 			$error = "Error adding new comment on page $page field $field->name for $comment->email: $error";
 			$this->error($error, Notice::superuser | Notice::log);
@@ -1648,25 +1694,28 @@ class FieldtypeComments extends FieldtypeMulti {
 	 */
 	public function deleteComment(Page $page, Field $field, Comment $comment, $notes = '') {
 		
+		$approved = $comment->isApproved();
+		$database = $this->wire()->database;
+		
 		if($field->get('depth') > 0) {
 			foreach($comment->children() as $child) {
 				$this->deleteComment($page, $field, $child); 
 			}
 		}
 		
-		$table = $this->wire('database')->escapeTable($field->getTable());
+		$table = $database->escapeTable($field->getTable());
 		$sql = "DELETE FROM `$table` WHERE id=:id AND pages_id=:pages_id";
-		$query = $this->wire('database')->prepare($sql); 
+		$query = $database->prepare($sql); 
 		$query->bindValue(':id', $comment->id, \PDO::PARAM_INT);
 		$query->bindValue(':pages_id', $page->id, \PDO::PARAM_INT);
 		$comments = $page->get($field->name); 
 		
 		try {
-			$this->wire('pages')->saveFieldReady($page, $field); 
+			if($approved) $this->triggerPageFieldSaveReady($page, $field);
 			$result = $query->execute();
 			if($comments) $comments->remove($comment); 
 			$this->commentDeleted($page, $field, $comment, $notes); 
-			$this->wire('pages')->savedField($page, $field); 
+			if($approved) $this->triggerPageFieldSaved($page, $field);
 			
 		} catch(\Exception $e) {
 			$this->error($e->getMessage()); 
@@ -1768,6 +1817,32 @@ class FieldtypeComments extends FieldtypeMulti {
 		
 		return $numComments;
 	}
+	
+	/**
+	 * Trigger hooks for Pages::saveFieldReady() and pages::savePageOrFieldReady()
+	 *
+	 * @param Page $page
+	 * @param Field $field
+	 *
+	 */
+	protected function triggerPageFieldSaveReady(Page $page, Field $field) {
+		$pages = $this->wire()->pages;
+		$pages->saveFieldReady($page, $field);
+		$pages->savePageOrFieldReady($page, $field->name);
+	}
+
+	/**
+	 * Trigger hooks for Pages::savedField() and pages::savedPageOrField()
+	 * 
+	 * @param Page $page
+	 * @param Field $field
+	 * 
+	 */
+	protected function triggerPageFieldSaved(Page $page, Field $field) {
+		$pages = $this->wire()->pages;
+		$pages->savedField($page, $field); 
+		$pages->savedPageOrField($page, array($field->name)); 
+	}
 
 	/**
 	 * Hook called after comment has been deleted
@@ -1798,42 +1873,20 @@ class FieldtypeComments extends FieldtypeMulti {
 		
 		$this->wire('log')->message("Approved comment $comment->id - $notes"); 
 		
-		if($field->get('useNotify')) {
-			
-			$emails = array();
-			foreach($page->get($field->name) as $c) {
-				
-				if($c->status < Comment::statusApproved) continue; 
-				if($c->id == $comment->id) continue; 
-				if(strtolower($c->email) == strtolower($comment->email)) continue; 
-				
-				/*
-				 * @todo this should be ready to use, but needs more testing before enabling it
-				 * 
-				if($c->flags & Comment::flagNotifyConfirmed) {
-					// notifications have been confirmed by double opt-in
-				} else {
-					continue;
-				}
-				*/
-				if($c->flags & Comment::flagNotifyAll) {
-					if($c->subcode) $emails[strtolower($c->email)] = $c->subcode;
-				} else if(($c->flags & Comment::flagNotifyReply) && $comment->parent_id == $c->id) {
-					if($c->subcode) $emails[strtolower($c->email)] = $c->subcode;
-				}
-			}
-			
-			// emails array contains email address => subcode to send notifications to
-			if(count($emails)) {
-				require_once(dirname(__FILE__) . '/CommentNotifications.php'); 	
-				$no = $this->wire(new CommentNotifications($page, $field)); 
-				foreach($emails as $email => $subcode) {
-					$no->sendNotificationEmail($comment, $email, $subcode);
-				}
+		if(!$field->get('useNotify')) return; // notifications not in use
+		if($comment->flags & Comment::flagNotifyQueue) return; // comment queued for 3rd party notifications
+		
+		$emailsData = $this->getNotifyEmails($page, $field, $comment); 
+
+		// emails array contains email address => subcode to send notifications to
+		if(count($emailsData)) {
+			$qty = $this->sendNotifyEmails($page, $field, $comment, $emailsData);
+			if($qty > 0) {
+				// emails sent
 			}
 		}
 	}
-	
+
 
 	/**
 	 * Hook called when a comment goes from approved to pending or spam
@@ -1860,6 +1913,11 @@ class FieldtypeComments extends FieldtypeMulti {
 	 * 
 	 */
 	public function ___commentAddReady(Page $page, Field $field, Comment $comment) {
+		if($page && $field) {} // ignore
+		$text = $comment->text; 
+		if(strtolower($this->wire()->config->dbEngine) !== 'utf8mb4') {
+			$comment->text = $this->wire()->sanitizer->removeMB4($text, array('replaceWith' => ' ')); 
+		}
 	}
 
 	/**
@@ -1873,6 +1931,113 @@ class FieldtypeComments extends FieldtypeMulti {
 	 *
 	 */
 	public function ___commentAdded(Page $page, Field $field, Comment $comment) {
+		$no = $this->commentNotifications($page, $field); 
+		$no->sendAdminNotificationEmail($comment);
+		$this->commentMaintenance($field);
+
+		if($comment->status == Comment::statusApproved || $comment->status == Comment::statusFeatured) {
+			$this->commentApproved($page, $field, $comment, $comment->approvalNote);
+		}
+	}
+	
+	/**
+	 * Get emails (and other data) of people that should be notified for a given Page’s comments
+	 *
+	 * @param Page $page
+	 * @param Field $field
+	 * @param Comment|null $comment
+	 * @return array
+	 * @throws WireException
+	 * @since 3.0.169
+	 *
+	 */
+	public function getNotifyEmails(Page $page, Field $field, Comment $comment = null) {
+
+		if(!$field->get('useNotify')) return array();
+
+		$emails = array();
+		$database = $this->wire()->database;
+		$table = $database->escapeTable($field->table);
+
+		$sql =
+			"SELECT id, cite, flags, email, subcode " . 
+			"FROM `$table` " .
+			"WHERE pages_id=:pages_id " .
+			"AND status>0 " .
+			"AND ((flags & 2) OR (flags & 4) OR (flags & 8)) " . // 2=replies, 4=all, 8=confirmed
+			"AND id!=:id " .
+			"AND email!=:email " .
+			"ORDER BY created DESC";
+
+		$query = $database->prepare($sql);
+		$query->bindValue(':pages_id', $page->id, \PDO::PARAM_INT);
+		$query->bindValue(':id', ($comment ? $comment->id : 0), \PDO::PARAM_INT);
+		$query->bindValue(':email', ($comment ? strtolower($comment->email) : ''), \PDO::PARAM_STR);
+		$query->execute();
+
+		while($row = $query->fetch(\PDO::FETCH_ASSOC)) {
+			$id = (int) $row['id'];
+			$flags = (int) $row['flags'];
+			$subcode = $row['subcode'];
+			$email = strtolower($row['email']);
+
+			if(empty($subcode)) continue;
+
+			/*
+			 * @todo this should be ready to use, but needs more testing before enabling it
+			 * 
+			if($flags & Comment::flagNotifyConfirmed) {
+				// notifications have been confirmed by double opt-in
+			} else {
+				continue;
+			}
+			*/
+
+			if($flags & Comment::flagNotifyAll) {
+				// OK
+			} else if(($flags & Comment::flagNotifyReply) && $comment && $comment->parent_id == $id) {
+				// OK
+			} else {
+				continue; // SKIP
+			}
+
+			$emails[$email] = array(
+				'id' => $id,
+				'email' => $email,
+				'cite' => $row['cite'],
+				'subcode' => $subcode,
+				'flags' => $flags,
+			);
+		}
+
+		$query->closeCursor();
+
+		return $emails;
+	}
+	
+	/**
+	 * Get emails (and other data) of people that should be notified for a given Page’s comments
+	 *
+	 * @param Page $page
+	 * @param Field $field
+	 * @param Comment|null $comment
+	 * @param array $emailsData
+	 * @return int
+	 * @since 3.0.175
+	 *
+	 */
+	public function ___sendNotifyEmails(Page $page, Field $field, Comment $comment, array $emailsData) {
+		
+		$no = $this->commentNotifications($page, $field); 
+		$cnt = 0;
+		
+		foreach($emailsData as $data) {
+			$subcode = $data['subcode'];
+			$email = $data['email']; 
+			$cnt += $no->sendNotificationEmail($comment, $email, $subcode);
+		}
+		
+		return $cnt;
 	}
 
 	/**
@@ -2238,6 +2403,24 @@ class FieldtypeComments extends FieldtypeMulti {
 		$options = parent::getImportValueOptions($field);
 		$options['test'] = true;
 		return $options;
+	}
+
+	/**
+	 * Get instance of CommentNotifications class
+	 * 
+	 * #pw-internal
+	 * 
+	 * @param Page $page
+	 * @param Field $field
+	 * @return CommentNotifications
+	 * @since 3.0.175
+	 * 
+	 */
+	public function commentNotifications(Page $page, Field $field) {
+		require_once(dirname(__FILE__) . '/CommentNotifications.php');
+		$no = new CommentNotifications($page, $field);
+		$this->wire($no);
+		return $no;
 	}
 	
 }

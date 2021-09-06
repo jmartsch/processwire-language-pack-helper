@@ -18,7 +18,13 @@
  * @property int $maxWidth Maximum layout width in pixels, or 0 for no max (default=1600).
  * @property bool|int $groupNotices Whether or not notices should be grouped by type
  * @property string $inputSize Size for input/select elements. One of "s" for small, "m" for medium (default), or "l" for large. 
- * @property bool|int $noGrid When true, do not use uk-width classes for Inputfields (use CSS percentages instead). 
+ * @property bool|int $ukGrid When true, use uk-width classes for Inputfields (rather than CSS percentages). 
+ * @property int $toggleBehavior (0=Standard, 1=Consistent)
+ * @property string $configPhpHash Hash used internally to detect changes to $config->AdminThemeUikit settings.
+ * @property int $cssVersion Current version number of core CSS/LESS files
+ * 
+ * @method string renderBreadcrumbs()
+ * @method string getUikitCSS()
  * 
  * 
  */
@@ -27,10 +33,9 @@ class AdminThemeUikit extends AdminThemeFramework implements Module, Configurabl
 	public static function getModuleInfo() {
 		return array(
 			'title' => 'Uikit',
-			'version' => 31,
+			'version' => 33,
 			'summary' => 'Uikit v3 admin theme',
 			'autoload' => 'template=admin', 
-			'requires' => 'ProcessWire>=3.0.100'
 		); 
 	}
 
@@ -43,10 +48,24 @@ class AdminThemeUikit extends AdminThemeFramework implements Module, Configurabl
 	const dev = false;
 
 	/**
+	 * Set to true when upgrading Uikit version
+	 * 
+	 */
+	const upgrade = false;
+
+	/**
+	 * Required CSS/LESS files version 
+	 * 
+	 * Increment on core less file changes that will also require a recompile of /site/assets/admin.css
+	 * 
+	 */
+	const requireCssVersion = 1;
+
+	/**
 	 * Default logo image file (relative to this dir)
 	 * 
 	 */
-	const logo = 'uikit/custom/images/pw-mark.png';
+	const logo = 'uikit-pw/images/pw-mark.png';
 
 	/**
 	 * sidenavType: primary navigation on left sidebar
@@ -76,13 +95,15 @@ class AdminThemeUikit extends AdminThemeFramework implements Module, Configurabl
 		$this->set('layout', '');
 		$this->set('noBorderTypes', array()); // 'InputfieldCKEditor' is a good one for this
 		$this->set('logoAction', 0); 
+		$this->set('toggleBehavior', 0);
 		$this->set('userLabel', '{Name}'); 
 		$this->set('userAvatar', 'icon.user-circle'); 
 		$this->set('maxWidth', 1600); 
 		$this->set('groupNotices', true);
 		$this->set('inputSize', 'm'); // m=medium (default), s=small, l=large
-		$this->set('noGrid', false); 
-		
+		$this->set('ukGrid', false); 
+		$this->set('configPhpHash', '');
+		$this->set('cssVersion', 0);
 		$this->setClasses(array(
 			'input' => 'uk-input',
 			'input-small' => 'uk-input uk-form-small',
@@ -101,7 +122,7 @@ class AdminThemeUikit extends AdminThemeFramework implements Module, Configurabl
 	
 	public function wired() {
 		parent::wired();
-		$this->addHookAfter('InputfieldSelector::ajaxReady', $this, 'hookInputfieldSelectorAjax'); 
+		$this->addHookAfter('InputfieldSelector::ajaxReady', $this, 'hookInputfieldSelectorAjax');
 	}
 	
 	/**
@@ -150,8 +171,12 @@ class AdminThemeUikit extends AdminThemeFramework implements Module, Configurabl
 			}
 		}
 		
-		if($this->noGrid) {
+		if(!$this->ukGrid) {
 			$this->addClass('body', 'AdminThemeUikitNoGrid'); 
+		}
+		
+		if($this->className() !== 'AdminThemeUikit') {
+			$this->addBodyClass('AdminThemeUikit');
 		}
 		
 		$session->removeFor('Page', 'appendEditUrl');
@@ -285,7 +310,7 @@ class AdminThemeUikit extends AdminThemeFramework implements Module, Configurabl
 		$isWrapper = $inputfield instanceof InputfieldWrapper && !$isFieldset && !$isMarkup;
 		$ukWidthClass = 'uk-width-1-1';
 		$globalInputSize = $this->get('inputSize');
-		$noGrid = $this->get('noGrid');
+		$ukGrid = $this->get('ukGrid');
 		$themeColor = '';
 		$themeBorder = '';
 		$themeOffset = '';
@@ -309,7 +334,7 @@ class AdminThemeUikit extends AdminThemeFramework implements Module, Configurabl
 			return; // no further settings needed for button
 		}
 
-		if(!$noGrid) {
+		if($ukGrid) {
 			$ukWidthClass = $this->getUkWidthClass($columnWidth, $widths); 
 			if($ukWidthClass) $wrapClasses[] = $ukWidthClass;
 		}
@@ -987,30 +1012,42 @@ class AdminThemeUikit extends AdminThemeFramework implements Module, Configurabl
 	
 		$options = array_merge($defaults, $options);
 		$logoURL = $this->get('logoURL');
+		$logoQS = '';
 		$svg = false;
 		
 		if(empty($logoURL) || $options['getNative'] || strpos($logoURL, '//') !== false) {
 			$native = true;
-			$logoURL = $config->urls($this->className()) . self::logo;
+			$logoURL = $this->url() . self::logo;
 		} else {
+			if(strpos($logoURL, '?')) list($logoURL, $logoQS) = explode('?', $logoURL, 2);
 			$logoURL = $config->urls->root . ltrim($logoURL, '/');
 			$logoURL = $sanitizer->entities($logoURL);
 			$native = false;
 			$svg = strtolower(pathinfo($logoURL, PATHINFO_EXTENSION)) === 'svg';
 		}
 		
-		if($options['getURL']) return $logoURL;
-	
 		$alt = $options['alt'];
-		if(empty($alt) && $this->wire('user')->isLoggedin()) {
+		if(empty($alt) && $this->wire()->user->isLoggedin()) {
 			$alt = "ProcessWire $config->version";
 		}
-		$class = 'pw-logo ' . ($native ? 'pw-logo-native' : 'pw-logo-custom');
-		$attr = "class='$class' src='$logoURL' alt='$alt' ";
-		if($svg && $options['height']) $attr .= "style='height:$options[height]' ";
-		$img = "<img $attr/>";
 		
-		return $img;
+		$class = 'pw-logo ' . ($native ? 'pw-logo-native' : 'pw-logo-custom');
+		$attr = "class='$class' alt='$alt' ";
+
+		if($svg) {
+			if($options['height']) $attr .= "style='height:$options[height]' ";
+			if(strpos($logoQS, 'uk-svg') === 0) {
+				// if logo has "?uk-svg" query string, add uk-svg attribute which makes it styleable via CSS/LESS (PR#77)
+				$attr .= 'uk-svg ';
+				$logoQS = str_replace(array('uk-svg&', 'uk-svg'), '', $logoQS);
+			}
+		}
+		
+		if($logoQS) $logoURL .= '?' . $sanitizer->entities($logoQS);
+		
+		$img = "<img src='$logoURL' $attr/>";
+		
+		return $options['getURL'] ? $logoURL : $img;
 	}
 
 	/**
@@ -1022,26 +1059,70 @@ class AdminThemeUikit extends AdminThemeFramework implements Module, Configurabl
 	public function getLogoURL() {
 		return $this->getLogo(array('getURL' => true));
 	}
+	
+	/**
+	 * Get URL to this admin theme
+	 *
+	 * @return string
+	 * @since 3.0.171
+	 *
+	 */
+	public function url() {
+		return $this->wire()->config->urls->modules . 'AdminTheme/AdminThemeUikit/';
+	}
+	
+	/**
+	 * Get disk path to this admin theme
+	 *
+	 * @return string
+	 * @since 3.0.171
+	 *
+	 */
+	public function path() {
+		return __DIR__ . '/';
+	}
 
 	/**
-	 * Get the primary Uikit CSS file to use
+	 * Get the primary Uikit CSS URL to use
 	 * 
 	 * @return string
+	 * @since 3.0.178 Was not hookable in prior versions
 	 * 
 	 */
-	public function getUikitCSS() {
-		$config = $this->wire('config');
-		$cssURL = $this->get('cssURL');
-		$moduleInfo = self::getModuleInfo();
-		$version = $moduleInfo['version'];
-		if($cssURL) {
-			if(strpos($cssURL, '//') === false) $cssURL = $config->urls->root . ltrim($cssURL, '/');
-			return $this->wire('sanitizer')->entities($cssURL);
-		} else if(self::dev && strpos(__FILE__, '/wire/modules/') === false) {
-			return $config->urls->adminTemplates . 'uikit/custom/pw.css?v=' . $version;
-		} else {
-			return $config->urls->adminTemplates . 'uikit/dist/css/uikit.pw.min.css?v=' . $version;
+	public function ___getUikitCSS() {
+
+		$config = $this->wire()->config;
+		$cssUrl = $this->get('cssURL');
+		
+		if($cssUrl) { // a custom css URL was set in the theme config
+			if(strpos($cssUrl, '//') === false) $cssUrl = $config->urls->root . ltrim($cssUrl, '/');
+			return $this->wire()->sanitizer->entities($cssUrl);
 		}
+		
+		require_once(__DIR__ . '/AdminThemeUikitCss.php');
+		
+		$settings = $config->AdminThemeUikit; 
+		if(!is_array($settings)) $settings = array();
+		$settings['requireCssVersion'] = self::requireCssVersion;
+		
+		if(self::upgrade) {
+			$settings['upgrade'] = true;
+			$settings['replacements'] = array('../pw/images/' => 'images/');
+		} else {
+			if(empty($settings['customCssFile'])) $settings['customCssFile'] = '/site/assets/admin.css';
+			$path = 'wire/modules/AdminTheme/AdminThemeUikit/uikit-pw/images/';
+			$back = str_repeat('../', substr_count(trim($settings['customCssFile'], '/'), '/'));
+			$settings['replacements'] = array(
+				'url(../pw/images/' => "url($back$path",
+				'url("../pw/images/' => "url(\"$back$path",
+				'url(pw/images/' => "url($back$path",
+				'url("pw/images/' => "url(\"$back$path"
+			);
+		}
+		
+		$css = new AdminThemeUikitCss($this, $settings);
+		
+		return $css->getCssFile();
 	}
 	
 	/**
@@ -1051,11 +1132,13 @@ class AdminThemeUikit extends AdminThemeFramework implements Module, Configurabl
 	 *
 	 */
 	public function getHeadJS() {
-	
-		$data = $this->wire('config')->js('adminTheme');
+
+		$config = $this->wire()->config;
+		$data = $config->js('adminTheme');
 		if(!is_array($data)) $data = array();
 		$data['logoAction'] = (int) $this->logoAction;
-		$this->wire('config')->js('adminTheme', $data);
+		$data['toggleBehavior'] = (int) $this->toggleBehavior; 
+		$config->js('adminTheme', $data);
 		
 		return parent::getHeadJS();
 	}

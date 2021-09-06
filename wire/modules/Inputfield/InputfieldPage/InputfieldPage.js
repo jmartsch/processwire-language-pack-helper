@@ -123,6 +123,7 @@ function initInputfieldPageDependentSelects($inputfieldPage) {
 
 		var labelFieldName = $t.attr('data-label');
 		var formatName = $t.attr('data-formatname');
+		var $repeaterItems = $t.parents('.InputfieldRepeaterItem');
 
 		if(!labelFieldName.length) $labelFieldName = 'name';
 
@@ -137,7 +138,16 @@ function initInputfieldPageDependentSelects($inputfieldPage) {
 
 			var part = parts[n]; // page matching part of the selector
 			var name = part.replace('=page.', '');
-			var $select1 = $('#Inputfield_' + name);
+			var $select1 = $('#Inputfield_' + name); // see if available in page editor
+			
+			if(!$select1.length && $repeaterItems.length) {
+				// if not available in page editor, and we are in a repeater, 
+				// see if available in any of the repeaters we are nested within
+				$repeaterItems.each(function() {		
+					if($select1.length) return;
+					$select1 = $('#Inputfield_' + name + '_repeater' + $(this).attr('data-page'));
+				});
+			}
 
 			if($select1.length < 1) continue;
 

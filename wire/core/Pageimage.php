@@ -77,6 +77,7 @@
  * @method array rebuildVariations($mode = 0, array $suffix = array(), array $options = array())
  * @method install($filename)
  * @method render($markup = '', $options = array())
+ * @method void createdVariation(Pageimage $image, array $data) Called after new image variation created (3.0.180+)
  *
  */
 
@@ -175,6 +176,8 @@ class Pageimage extends Pagefile {
 	public function __clone() {
 		$this->imageInfo['width'] = 0; 
 		$this->imageInfo['height'] = 0;
+		$this->pageimageDebugInfo = null;
+		$this->variations = null;
 		parent::__clone();
 	}
 
@@ -682,7 +685,7 @@ class Pageimage extends Pagefile {
 			$result = $this->___size($width, $height, $options);
 		}
 
-		if($result) {
+		if($result && $result !== $this) {
 			$options['_width'] = $width;
 			$options['_height'] = $height;
 			$result->set('sizeOptions', $options);
@@ -745,6 +748,7 @@ class Pageimage extends Pagefile {
 		$debug = $config->debug;
 		$configOptions = $config->imageSizerOptions; 
 		$webpOptions = $config->webpOptions;
+		$createdVariationHookData = null; // populated as array only when new variation created (for createdVariation hook)
 		if(!empty($webpOptions['quality'])) $defaultOptions['webpQuality'] = $webpOptions['quality'];
 		
 		if(!is_array($configOptions)) $configOptions = array();
@@ -848,7 +852,7 @@ class Pageimage extends Pagefile {
 		// create a new resize if it doesn't already exist or forceNew option is set
 		if(!$filenameFinalExists && !file_exists($this->filename())) {
 			// no original file exists to create variation from 
-			$this->error = "Original image does not exist to create size variation";
+			$this->error = "Original image does not exist to create size variation: " . $this->url();
 			
 		} else if(!$filenameFinalExists || $options['forceNew']) {
 
@@ -899,8 +903,15 @@ class Pageimage extends Pagefile {
 					if($sizer->resize($width, $height)) {
 						if($options['webpAdd'] && $options['webpOnly']) {
 							if(is_file($filenameUnvalidated)) $files->unlink($filenameUnvalidated);
-						} else if(!$files->rename($filenameUnvalidated, $filenameFinal)) {
-							$this->error = "Rename failed: $filenameUnvalidated => $filenameFinal";
+						} else {
+							clearstatcache();
+							if(!$files->rename($filenameUnvalidated, $filenameFinal)) {
+								if($files->exists($filenameFinal)) {
+									// potential race condition: another request won
+								} else {
+									$this->error = "Rename failed: $filenameUnvalidated => $filenameFinal";
+								}
+							}
 						}
 						if($options['webpAdd'] && file_exists($filenameUnvalidatedWebp)) { 
 							$files->rename($filenameUnvalidatedWebp, $filenameFinalWebp);
@@ -908,13 +919,25 @@ class Pageimage extends Pagefile {
 					} else {
 						$this->error = "ImageSizer::resize($width, $height) failed for $filenameUnvalidated";
 					}
-
+					
 					if($debug && empty($options['webpOnly'])) $this->wire('log')->save('image-sizer',
 						str_replace('ImageSizerEngine', '', $sizer->getEngine()) . ' ' . 
 						($this->error ? "FAILED Resize: " : "Resized: ") . "$originalName => " . basename($filenameFinal) . " " . 
 						"({$width}x{$height}) " . Debug::timer($timer) . " secs $originalSize => " . filesize($filenameFinal) . " bytes " . 
 						"(quality=$options[quality], sharpening=$options[sharpening]) "
 					);
+					
+					if(!$this->error) {
+						$createdVariationHookData = array(
+							'width' => $width,
+							'height' => $height,
+							'options' => $options,
+							'filenameUnvalidated' => $filenameUnvalidated,
+							'filenameFinal' => $filenameFinal,
+							'filenameUnvalidatedWebp' => $filenameUnvalidatedWebp,
+							'filenameFinalWebp' => $filenameFinalWebp,
+						);
+					}
 					
 				} catch(\Exception $e) {
 					$this->trackException($e, false); 
@@ -931,10 +954,10 @@ class Pageimage extends Pagefile {
 		// if an error occurred, that error property will be populated with details
 		if($this->error) { 
 			// error condition: unlink copied files
-			if($filenameFinal && is_file($filenameFinal)) $files->unlink($filenameFinal, true);
-			if($filenameUnvalidated && is_file($filenameUnvalidated)) $files->unlink($filenameUnvalidated);
-			if($filenameFinalWebp && is_file($filenameFinalWebp)) $files->unlink($filenameFinalWebp, true);
-			if($filenameUnvalidatedWebp && is_file($filenameUnvalidatedWebp)) $files->unlink($filenameUnvalidatedWebp);
+			if($filenameFinal && $files->exists($filenameFinal)) $files->unlink($filenameFinal, true);
+			if($filenameUnvalidated && $files->exists($filenameUnvalidated)) $files->unlink($filenameUnvalidated);
+			if($filenameFinalWebp && $files->exists($filenameFinalWebp)) $files->unlink($filenameFinalWebp, true);
+			if($filenameUnvalidatedWebp && $files->exists($filenameUnvalidatedWebp)) $files->unlink($filenameUnvalidatedWebp);
 
 			// we also tell PW about it for logging and/or admin purposes
 			$this->error($this->error);
@@ -944,6 +967,8 @@ class Pageimage extends Pagefile {
 
 		$pageimage->setFilename($filenameFinal); 	
 		$pageimage->setOriginal($this); 
+		
+		if($createdVariationHookData) $this->createdVariation($pageimage, $createdVariationHookData); 
 
 		return $pageimage; 
 	}
@@ -1427,6 +1452,16 @@ class Pageimage extends Pagefile {
 	}
 
 	/**
+	 * Hook called after successful creation of image variation
+	 * 
+	 * @param Pageimage $image The variation image that was created
+	 * @param array $data Verbose associative array of data used to create the variation 
+	 * @since 3.0.180
+	 * 
+	 */
+	protected function ___createdVariation(Pageimage $image, array $data) { }
+
+	/**
 	 * Identify this Pageimage as a variation, by setting the Pageimage it was resized from.
 	 * 
 	 * #pw-group-variations
@@ -1580,7 +1615,7 @@ class Pageimage extends Pagefile {
 		$original = null;
 		$replacements = array();
 		$properties = array(
-			'url', 'httpUrl', 'URL', 'HTTPURL',
+			'url', 'src', 'httpUrl', 'URL', 'HTTPURL',
 			'description', 'alt', 'tags', 'ext', 'class',
 			'width', 'height', 'hidpiWidth', 'hidpiHeight',
 		);
@@ -1720,6 +1755,39 @@ class Pageimage extends Pagefile {
 		$extras = parent::extras();
 		$extras['webp'] = $this->webp();
 		return $extras;
+	}
+	
+	/**
+	 * Rename this file
+	 *
+	 * Remember to follow this up with a `$page->save()` for the page that the file lives on.
+	 *
+	 * #pw-group-manipulation
+	 *
+	 * @param string $basename New name to use. Must be just the file basename (no path).
+	 * @return string|bool Returns new name (basename) on success, or boolean false if rename failed.
+	 *
+	 */
+	public function rename($basename) {
+		
+		$variations = $this->getVariations();
+		$oldBasename = $this->basename;
+		$newBasename = parent::rename($basename);
+		
+		if($newBasename === false) return false;
+		
+		$ext = '.' . $this->ext();
+		$oldName = basename($oldBasename, $ext);
+		$newName = basename($newBasename, $ext); 
+		
+		foreach($variations as $pageimage) {
+			/** @var Pageimage $pageimage */
+			if(strpos($pageimage->basename, $oldName) !== 0) continue;
+			$newVariationName = $newName . substr($pageimage->basename, strlen($oldName));
+			$pageimage->rename($newVariationName);
+		}
+		
+		return $newBasename;
 	}
 	
 	/**

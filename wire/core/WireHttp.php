@@ -276,7 +276,7 @@ class WireHttp extends Wire {
 	 * 
 	 */
 	public function __construct() {
-		$this->hasCURL = function_exists('curl_init') && !ini_get('safe_mode') && !ini_get('open_basedir');
+		$this->hasCURL = function_exists('curl_init') && !ini_get('safe_mode'); // && !ini_get('open_basedir');
 		$this->hasFopen = ini_get('allow_url_fopen');
 		$this->resetRequest();
 		$this->resetResponse();
@@ -364,7 +364,7 @@ class WireHttp extends Wire {
 	 * @param string $url URL to request (including http:// or https://)
 	 * @param mixed $data Array of data to send (if not already set before) or raw data to send
 	 * @param array $options Optional options to modify default behavior, see the send() method for details. 
-	 * @return bool|array False on failure or Arrray with ResponseHeaders on success.
+	 * @return bool|array False on failure or Array with ResponseHeaders on success.
 	 * @see WireHttp::send(), WireHttp::post(), WireHttp::get()
 	 *
 	 */
@@ -586,6 +586,7 @@ class WireHttp extends Wire {
 		$this->resetResponse();
 		$this->lastSendType = 'curl';
 		$timeout = isset($options['timeout']) ? (float) $options['timeout'] : $this->getTimeout();
+		$postMethods = array('POST', 'PUT', 'DELETE', 'PATCH'); // methods for CURLOPT_POSTFIELDS
 		$proxy = '';
 		
 		if(!empty($options['proxy'])) {
@@ -600,9 +601,10 @@ class WireHttp extends Wire {
 
 		curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, $timeout);
 		curl_setopt($curl, CURLOPT_TIMEOUT, $timeout);
-		curl_setopt($curl, CURLOPT_FOLLOWLOCATION, true);
 		curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
 		curl_setopt($curl, CURLOPT_USERAGENT, $this->getUserAgent());
+		
+		if(!ini_get('open_basedir')) curl_setopt($curl, CURLOPT_FOLLOWLOCATION, true);
 
 		if(version_compare(PHP_VERSION, '5.6') >= 0) {
 			// CURLOPT_SAFE_UPLOAD value is default true (setopt not necessary)
@@ -621,27 +623,28 @@ class WireHttp extends Wire {
 			curl_setopt($curl, CURLOPT_HTTPHEADER, $headers);
 		}
 		
-		if($method == 'POST') {
+		if($method === 'POST') {
 			curl_setopt($curl, CURLOPT_POST, true);
-		} else if($method == 'PUT') {
-			curl_setopt($curl, CURLOPT_PUT, true);
-		} else if($method == 'HEAD') {
+		} else if($method === 'GET') {
+			curl_setopt($curl, CURLOPT_HTTPGET, true);
+		} else if($method === 'HEAD') {
 			curl_setopt($curl, CURLOPT_NOBODY, true); 
 		} else {
-			curl_setopt($curl, CURLOPT_HTTPGET, true);
+			curl_setopt($curl, CURLOPT_CUSTOMREQUEST, $method);
 		}
+		// note: CURLOPT_PUT removed because it also requires CURLOPT_INFILE and CURLOPT_INFILESIZE.
 	
 		if($proxy) curl_setopt($curl, CURLOPT_PROXY, $proxy);
 		
 		if(!empty($this->data)) {
-			if($method === 'POST') {
+			if(in_array($method, $postMethods)) {
 				curl_setopt($curl, CURLOPT_POSTFIELDS, $this->data);
 			} else {
 				$content = http_build_query($this->data);
 				if(strlen($content)) $url .= (strpos($url, '?') === false ? '?' : '&') . $content;
 			}
 		} else if(!empty($this->rawData)) {
-			if($method === 'POST') {
+			if(in_array($method, $postMethods)) {
 				curl_setopt($curl, CURLOPT_POSTFIELDS, $this->rawData);
 			} else {
 				throw new WireException("Raw data option with CURL not supported for $method"); 
@@ -742,7 +745,8 @@ class WireHttp extends Wire {
 
 		$this->setHeader('content-length', strlen($content));
 
-		$request = "$method $path$query HTTP/1.0\r\nHost: $host\r\n";
+		$proto = $this->wire()->config->serverProtocol;
+		$request = "$method $path$query $proto\r\nHost: $host\r\n";
 
 		foreach($this->headers as $key => $value) {
 			$request .= "$key: $value\r\n";
@@ -902,6 +906,7 @@ class WireHttp extends Wire {
 		
 		$this->resetResponse();
 		$fromURL = str_replace(' ', '%20', $fromURL);
+		$setopts = null;
 		$proxy = '';
 		
 		if(!empty($options['proxy'])) $proxy = $options['proxy'];
@@ -917,6 +922,16 @@ class WireHttp extends Wire {
 		curl_setopt($curl, CURLOPT_FILE, $fp); // write curl response to file
 		curl_setopt($curl, CURLOPT_FOLLOWLOCATION, true);
 		if($proxy) curl_setopt($curl, CURLOPT_PROXY, $proxy);
+
+		// custom CURL options provided in $options array
+		if(!empty($options['curl']) && !empty($options['curl']['setopt'])) {
+			$setopts = $options['curl']['setopt'];
+		} else if(!empty($options['curl_setopt'])) {
+			$setopts = $options['curl_setopt'];
+		}
+		if(is_array($setopts)) {
+			curl_setopt_array($curl, $setopts);
+		}
 		
 		$result = curl_exec($curl);
 		if($result) $this->httpCode = curl_getinfo($curl, CURLINFO_HTTP_CODE);
@@ -1292,7 +1307,7 @@ class WireHttp extends Wire {
 	 *
 	 * @param string|bool $filename Filename to send (or boolean false if sending $options[data] rather than file)
 	 * @param array $options Options that you may pass in:
-	 *   - `exit` (bool): Halt program executation after file send (default=true).
+	 *   - `exit` (bool): Halt program execution after file send (default=true).
 	 *   - `partial` (bool): Allow use of partial downloads via HTTP_RANGE requests? Since 3.0.131 (default=true)
 	 *   - `forceDownload` (bool|null): Whether file should force download (default=null, i.e. let content-type header decide).
 	 *   - `downloadFilename` (string): Filename you want the download to show on user's computer, or omit to use existing.
@@ -1489,7 +1504,7 @@ class WireHttp extends Wire {
 	 *  - `reset` (bool): Reset/clear headers that were set to WireHttp after sending? (default=false)
 	 *  - `headers` (array): Array [ name => value ] of headers to send, or omit to use headers set to WireHttp instance (default=[])
 	 *  - `httpCode` (int): HTTP status code to send or omit for none (default=0, aka don’t send)
-	 *  - `httpVersion` (string): HTTP version string (default='1.1')
+	 *  - `httpVersion` (string): HTTP version string like "1.1" (default=version string pulled from current server protcol)
 	 *  - `replacements` (array): Associative array of [ find => replace ] strings to replace values in headers, i.e. `[ '{filesize}' => 12345 ]` (default=[])
 	 * @return array Returns the headers that were sent (with duplicates removed, replacements processed, and lowercase header names)
 	 * @throws WireException If given an unrecognized `$option['status']` code
@@ -1497,23 +1512,30 @@ class WireHttp extends Wire {
 	 * 
 	 */
 	public function sendHeaders(array $options = array()) {
+		
 		$defaults = array(
 			'reset' => false, 
 			'headers' => array(), 
 			'httpCode' => 0, 
-			'httpVersion' => '1.1',
+			'httpVersion' => '',
 			'replacements' => array(),
 		);
+		
 		$options = array_merge($defaults, $options);
 		$headers = empty($options['headers']) ? $this->headers : $options['headers'];
 		$httpCode = (int) $options['httpCode'];
+		
 		if(!$httpCode && isset($headers['httpcode'])) { 
 			if(ctype_digit($headers['httpcode'])) $httpCode = (int) $headers['httpcode'];
 		}
+		
 		if($httpCode > 0) {
 			if(!isset($this->httpCodes[$httpCode])) throw new WireException("Unrecognized http status code: $httpCode"); 
-			$this->sendHeader("HTTP/$options[httpVersion] $httpCode " . $this->httpCodes[$httpCode]);
+			$proto = empty($options['httpVersion']) ? $this->wire()->config->serverProtocol : $options['httpVersion'];
+			if(!strpos($proto, '/')) $proto = "HTTP/$proto";
+			$this->sendHeader("$proto $httpCode " . $this->httpCodes[$httpCode]);
 		}
+		
 		$a = array();
 		foreach($headers as $key => $value) {
 			$key = strtolower($key);
@@ -1523,10 +1545,13 @@ class WireHttp extends Wire {
 			}
 			$a[$key] = $value;
 		}
+		
 		foreach($a as $key => $value) {
 			$this->sendHeader($key, $value); 
 		}
+		
 		if($options['reset'] && $headers === $this->headers) $this->headers = array();
+		
 		return $a;
 	}
 
@@ -1546,6 +1571,25 @@ class WireHttp extends Wire {
 		} else {
 			header("$name: $value"); 
 		}
+	}
+
+	/**
+	 * Send an HTTP status header
+	 * 
+	 * @param int|string $status Status code (i.e. '200') or code and text (i.e. '200 OK')
+	 * @since 3.0.166
+	 * 
+	 */
+	public function sendStatusHeader($status) {
+		if(ctype_digit("$status")) {
+			$statusText = isset($this->httpCodes[(int) $status]) ? $this->httpCodes[(int) $status] : '';
+			$status = "$status $statusText";
+		}
+		if(stripos($status, 'HTTP/') !== 0) {
+			$proto = $this->wire()->config->serverProtocol;
+			$status = "$proto $status";
+		}
+		$this->sendHeader($status); 
 	}
 
 	/**
@@ -1738,7 +1782,8 @@ class WireHttp extends Wire {
 	/**
 	 * Get the current user-agent header
 	 * 
-	 * To set the user agent header, use `$http->setHeader('user-agent', '...');`
+	 * To set the user agent header, use `$http->setHeader('user-agent', '...');` 
+	 * or in 3.0.183+ there is also `$http->setUserAgent('...');`
 	 * 
 	 * #pw-group-request-headers
 	 * 
@@ -1753,6 +1798,19 @@ class WireHttp extends Wire {
 			$userAgent = 'ProcessWire/' . ProcessWire::versionMajor . '.' . ProcessWire::versionMinor . ' (' . $this->className() . ')';
 		}
 		return $userAgent;
+	}
+
+	/**
+	 * Set the current user-agent header
+	 * 
+	 * #pw-group-request-headers
+	 * 
+	 * @param string $userAgent
+	 * @since 3.0.183
+	 * 
+	 */
+	public function setUserAgent($userAgent) {
+		$this->setHeader('user-agent', $userAgent); 
 	}
 
 	/**
@@ -1805,7 +1863,7 @@ class WireHttp extends Wire {
 	 * @param $errcontext
 	 * 
 	 */
-	public function _errorHandler($errno, $errstr, $errfile, $errline, $errcontext) {
+	public function _errorHandler($errno, $errstr, $errfile = '', $errline = 0, $errcontext = array()) {
 		if($errfile || $errline || $errcontext) {} // ignore
 		$this->error[] = "$errno: $errstr";
 	}

@@ -46,6 +46,7 @@
  * @method bool deleteTemplateField(Template $template, Field $field)
  * @method Field cloneField(Field $field)
  * @method void renamedField(Field $field, $prevName) 
+ * @method void savedField(Field $field)
  * @method void install()
  * @method void uninstall()
  * 
@@ -699,31 +700,79 @@ abstract class Fieldtype extends WireData implements Module {
 	/**
 	 * Get the database query that matches a Fieldtype table’s data with a given value.
 	 *
-	 * Possible template method: If overridden, children should not call this parent method. 
+	 * Possible template method: If overridden, children do not need to call this method
+	 * if they update the $query themselves. 
+	 *
+	 * Note the following additional properties are available from the $query argument: 
+	 * 
+	 *  - `$query->field` (Field): Field instance that being referred to match.
+	 *  - `$query->group` (string): Original group of the field in the selector (when applicable).
+	 *  - `$query->selector` (Selector): Original Selector object (matching the $field).
+	 *  - `$query->selectors` (Selectors): Original Selectors object (matching $field and others).
+	 *  - `$query->parentQuery` (DatabaseQuerySelect): Parent database query that $query will be merged into.
+	 *  - `$query->pageFinder` (PageFinder): The PageFinder instance that initiated the query, for additional info.
 	 * 
 	 * #pw-group-finding
 	 *
 	 * @param PageFinderDatabaseQuerySelect $query
 	 * @param string $table The table name to use
 	 * @param string $subfield Name of the subfield (typically 'data', unless selector explicitly specified another)
-	 * @param string $operator The comparison operator
-	 * @param mixed $value The value to find
-	 * @return DatabaseQuery $query
+	 * @param string $operator The comparison operator. 
+	 *  - This base Fieldtype class accepts only database operators (=, !=, >, >=, <, <=, &). 
+	 *  - Other Fieldtypes may choose to accept more operators according to need of Fieldtype.
+	 * @param mixed $value Value to find. 
+	 *  - If given array, this base Fieldtype class (only) will match via OR condition. (3.0.182+)
+	 *  - Other Fieldtypes may choose to interpret array values differently according need of Fieldtype.
+	 * @return PageFinderDatabaseQuerySelect|DatabaseQuerySelect $query
 	 * @throws WireException
 	 *
 	 */
 	public function getMatchQuery($query, $table, $subfield, $operator, $value) {
 
-		$database = $this->wire('database');
+		$database = $this->wire()->database;
 
-		if(!$database->isOperator($operator)) 
-			throw new WireException("Operator '{$operator}' is not implemented in {$this->className}"); 
+		if(!$database->isOperator($operator)) {
+			throw new WireException("Operator '{$operator}' is not implemented in {$this->className}");
+		}
 
 		$table = $database->escapeTable($table); 
 		$subfield = $database->escapeCol($subfield);
 		$operator = $database->escapeOperator($operator, WireDatabasePDO::operatorTypeComparison); 
-		$query->where("{$table}.{$subfield}{$operator}?", $value); // QA
+		
+		if(is_array($value)) {
+			$a = array();
+			foreach($value as $v) {
+				$bindKey = $query->bindValueGetKey($v);
+				$a[] = "{$table}.{$subfield}{$operator}{$bindKey}";
+			}
+			$query->where('(' . implode(' OR ', $a) . ')'); 
+		} else {
+			$query->where("{$table}.{$subfield}{$operator}?", $value); // QA
+		}
+		
 		return $query; 
+	}
+
+	/**
+	 * Get or update query to sort by given $field or $subfield
+	 * 
+	 * Return false if this Fieldtype does not have built-in sort logic and PageFinder should handle it. 
+	 * Return string of query to add to ORDER BY statement, or boolean true if method added it already. 
+	 * 
+	 * #pw-internal
+	 *
+	 * @param Field $field
+	 * @param DatabaseQuerySelect $query
+	 * @param string $table
+	 * @param string $subfield
+	 * @param bool $desc True for descending, false for ascending
+	 * @return bool|string
+	 * @since 3.0.167
+	 * 
+	 */
+	public function getMatchQuerySort(Field $field, $query, $table, $subfield, $desc) {
+		if($query && $table && $field && $subfield && $desc) {}
+		return false;
 	}
 
 	/**
@@ -1285,7 +1334,7 @@ abstract class Fieldtype extends WireData implements Module {
 			
 		} catch(\PDOException $e) {
 			if($e->getCode() == 23000) {
-				$message = sprintf($this->_('Value not allowed for field “%2$s” because it is already in use'), $field->name);
+				$message = sprintf($this->_('Value not allowed for field “%s” because it is already in use'), $field->name);
 				throw new WireDatabaseException($message, $e->getCode(), $e);
 			} else {
 				throw $e;
@@ -1390,12 +1439,12 @@ abstract class Fieldtype extends WireData implements Module {
 	 *
 	 */
 	public function ___replacePageField(Page $src, Page $dst, Field $field) {
-		$database = $this->wire('database');
+		$database = $this->wire()->database;
 		$table = $database->escapeTable($field->table);
 		$this->emptyPageField($dst, $field); 
 		// move the data
 		$sql = "UPDATE `$table` SET pages_id=:dstID WHERE pages_id=:srcID";
-		$query = $this->wire('database')->prepare($sql);
+		$query = $database->prepare($sql);
 		$query->bindValue(':dstID', (int) $dst->id);
 		$query->bindValue(':srcID', (int) $src->id);
 		$result = $query->execute();
@@ -1420,7 +1469,7 @@ abstract class Fieldtype extends WireData implements Module {
 	 * 
 	 */
 	public function ___deleteTemplateField(Template $template, Field $field) {
-		return $this->wire('fields')->deleteFieldDataByTemplate($field, $template); 
+		return $this->wire()->fields->deleteFieldDataByTemplate($field, $template); 
 	}
 
 	/**
@@ -1450,6 +1499,19 @@ abstract class Fieldtype extends WireData implements Module {
 	 */
 	public function ___renamedField(Field $field, $prevName) {
 		if($field && $prevName) {}
+	}
+
+	/**
+	 * Called when Field using this Fieldtype has been saved 
+	 * 
+	 * This is primarily so that Fieldtype modules can identify when their fields are 
+	 * saved without having to add a hook to the $fields API var. 
+	 * 
+	 * @param Field $field
+	 * @since 3.0.171
+	 * 
+	 */
+	public function ___savedField(Field $field) {
 	}
 
 	/**
@@ -1499,7 +1561,7 @@ abstract class Fieldtype extends WireData implements Module {
 	 * 
 	 * #pw-group-other
 	 * 
-	 * @throws WireException Should throw an Exception if uninstsall can't be completed.
+	 * @throws WireException Should throw an Exception if uninstall can't be completed.
 	 *
 	 */
 	public function ___uninstall() {

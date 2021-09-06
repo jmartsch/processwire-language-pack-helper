@@ -5,7 +5,7 @@
  * 
  * This class is for internal use. You should manipulate hooks from Wire-derived classes instead. 
  *
- * ProcessWire 3.x, Copyright 2016 by Ryan Cramer
+ * ProcessWire 3.x, Copyright 2021 by Ryan Cramer
  * https://processwire.com
  *
  */
@@ -68,7 +68,27 @@ class WireHooks {
 	 * It is for internal use only. See also $defaultHookOptions[allInstances].
 	 *
 	 */
-	protected $staticHooks = array();
+	protected $staticHooks = array(
+		// 'SomeClass' => [
+		//   'someMethod' => [ hooks ],
+		//   'someOtherMethod' => [ hooks ]
+		// ],
+		// 'AnotherClass' => [
+		//   'anotherMethod' => [ hooks ] 
+		// ]
+	);
+
+	/**
+	 * @var array
+	 * 
+	 */
+	protected $pathHooks = array(
+		// 'HookID' => [
+		//    'match' => '/foo/bar/{baz}/(.+)/', 
+		//    'filters' => [ 0 => '/foo/', 2 => '/bar/' ], 
+		//   ], ... 
+		// ]
+	);
 
 	/**
 	 * A cache of all hook method/property names for an optimization.
@@ -79,7 +99,10 @@ class WireHooks {
 	 * This cache exists primarily to gain some speed in our __get and __call methods.
 	 *
 	 */
-	protected $hookMethodCache = array();
+	protected $hookMethodCache = array(
+		// 'method()' => true,
+		// 'property' => true, 
+	);
 
 	/**
 	 * Same as hook method cache but for "Class::method"
@@ -87,7 +110,10 @@ class WireHooks {
 	 * @var array
 	 * 
 	 */
-	protected $hookClassMethodCache = array();
+	protected $hookClassMethodCache = array(
+		// 'Class::method()' => true, 
+		// 'Class::property' => true, 
+	);
 
 	/**
 	 * Cache of all local hooks combined, for debugging purposes
@@ -114,6 +140,32 @@ class WireHooks {
 	 * 
 	 */
 	protected $debugTimers = array();
+
+	/**
+	 * Characters that can begin a path hook definition (i.e. '/path/' or '!regex!', etc.)
+	 * 
+	 * @var string
+	 * 
+	 */
+	protected $pathHookStarts = '/!@#%.([^';
+
+	/**
+	 * Allow use of path hooks?
+	 * 
+	 * This should be set to false once reaching the boot stage where it no longer applies. 
+	 * 
+	 * @var bool
+	 * 
+	 */
+	protected $allowPathHooks = true;
+
+	/**
+	 * Populated when a path hook requires a redirect
+	 * 
+	 * @var string
+	 * 
+	 */
+	protected $pathHookRedirect = '';
 
 	/**
 	 * @var ProcessWire
@@ -506,18 +558,28 @@ class WireHooks {
 			$toMethod = null;
 		}
 
-		if(is_null($toMethod)) {
+		if($toMethod === null) {
 			// $toObject has been omitted and a procedural function specified instead
 			// $toObject may also be a closure
 			$toMethod = $toObject;
 			$toObject = null;
 		}
 		
+		if($toMethod === null) {
+			throw new WireException("Method to call is required and was not specified (toMethod)");
+		}
+		
+		if(strpos($method, '___') === 0) {
+			$method = substr($method, 3);
+		} else if(strpos($this->pathHookStarts, $method[0]) !== false) {
+			return $this->addPathHook($object, $method, $toObject, $toMethod, $options);
+		}
+		
+		if(method_exists($object, $method)) {
+			throw new WireException("Method " . $object->className() . "::$method is not hookable");
+		}
+		
 		$options = array_merge($this->defaultHookOptions, $options);
-
-		if(is_null($toMethod)) throw new WireException("Method to call is required and was not specified (toMethod)");
-		if(strpos($method, '___') === 0) $method = substr($method, 3);
-		if(method_exists($object, $method)) throw new WireException("Method " . $object->className() . "::$method is not hookable");
 	
 		// determine whether the hook handling method is public or private/protected
 		$toPublic = true; 
@@ -755,6 +817,71 @@ class WireHooks {
 	}
 
 	/**
+	 * Add a hook that handles a request path
+	 * 
+	 * @param Wire $object
+	 * @param string $path
+	 * @param Wire|null|callable $toObject
+	 * @param string $toMethod
+	 * @param array $options
+	 * @return string
+	 * @throws WireException
+	 * 
+	 */
+	protected function addPathHook(Wire $object, $path, $toObject, $toMethod, $options = array()) {
+		
+		if(!$this->allowPathHooks) {
+			throw new WireException('Path hooks must be attached during init or ready states');
+		}
+		
+		$method = 'ProcessPageView::pathHooks';
+		$id = $this->addHook($object, $method, $toObject, $toMethod, $options); 
+		$filters = array();
+		$path = trim($path);
+		$pathParts = explode('/', trim($path, '/'));
+		$key = null;
+		
+		foreach($pathParts as $index => $filter) {
+
+			// see if it is alphanumeric, other than dash or underscore
+			if(!ctype_alnum($filter) && !ctype_alnum(str_replace(array('-', '_'), '', $filter))) {
+				// likely a regex pattern or named argument, see if we can use some from beginning
+				$filterNew = '';
+				for($n = 0; $n < strlen($filter); $n++) {
+					$test = substr($filter, 0, $n+1);
+					if(!ctype_alnum($test)) break;
+					$filterNew = $test;
+				}
+				if(!strlen($filterNew)) continue;
+				$filter = $filterNew;
+			}
+			
+			// test the filter to see which one will match
+			$pos = false;
+			foreach(array("/$filter/", "/$filter", "$filter/") as $test) {
+				$pos = strpos($path, $test); 
+				if($pos === false) continue;
+				$filter = $test;
+				break;
+			}
+	
+			// ensure array index 0 only ever refers to match at beginning
+			$key = $pos === 0 && $index === 0 ? 0 : $index + 1;
+			$filters[$key] = $filter;
+		}
+	
+		// trailing slash on last filter is optional
+		if($key !== null) $filters[$key] = rtrim($filters[$key], '/');
+		
+		$this->pathHooks[$id] = array(
+			'match' => $path,
+			'filters' => $filters, 
+		);
+		
+		return $id; 
+	}
+
+	/**
 	 * Provides the implementation for calling hooks in ProcessWire
 	 *
 	 * Unlike __call, this method won't trigger an Exception if the hook and method don't exist.
@@ -784,6 +911,7 @@ class WireHooks {
 		$profiler = $this->wire->wire('profiler');
 		$hooks = null;
 		$methodExists = false;
+		$useHookReturnValue = false; // allow use of "return $value;" in hook in addition to $event->return ?
 		
 		if($type === 'method') {
 			$methodExists = method_exists($object, $realMethod); 
@@ -876,6 +1004,13 @@ class WireHooks {
 					}
 					if(!$matches) continue; // don't run hook
 				}
+				
+				if($this->allowPathHooks && isset($this->pathHooks[$hook['id']])) {
+					$allowRunPathHook = $this->allowRunPathHook($hook['id'], $arguments);
+					$this->removeHook($object, $hook['id']); // once only
+					if(!$allowRunPathHook) continue;
+					$useHookReturnValue = true;
+				}
 
 				$event = new HookEvent(array(
 					'object' => $object,
@@ -930,8 +1065,13 @@ class WireHooks {
 				}
 
 				if($returnValue !== null) {
-					// hook method/func had an explicit return statement with a value
-					// allow for use of $returnValue as alternative to $event->return?
+					// hook method/func had an explicit 'return $value;' statement 
+					// we can optionally use this rather than $event->return. Can be useful
+					// in cases where a return value doesn’t need to be passed around to
+					// more than one hook
+					if($useHookReturnValue) {
+						$event->return = $returnValue;
+					}
 				}
 				
 				if($profilerEvent) $profiler->stop($profilerEvent);
@@ -957,6 +1097,112 @@ class WireHooks {
 		if($hookTimer) Debug::saveTimer($hookTimer);
 
 		return $result;
+	}
+
+	/**
+	 * Allow given path hook to run?
+	 * 
+	 * This checks if the hook’s path matches the request path, allowing for both 
+	 * regular and regex matches and populating parenthesized portions to arguments
+	 * that will appear in the HookEvent.
+	 * 
+	 * @param string $id Hook ID
+	 * @param array $arguments
+	 * @return bool
+	 * @since 3.0.173
+	 * 
+	 */
+	protected function allowRunPathHook($id, array &$arguments) {
+		
+		$pathHook = $this->pathHooks[$id];
+		$requestPath = $arguments[0];
+		$filterFail = false;
+		
+		// first pre-filter the requestPath against any words matchPath (filters)
+		foreach($pathHook['filters'] as $key => $filter) {
+			$pos = strpos($requestPath, $filter); 
+			if($pos === false || ($key === 0 && $pos !== 0)) $filterFail = true;
+			if($filterFail) break;
+		}
+		
+		if($filterFail) return false;
+		
+		// at this point the path hook passed pre-filters and might match
+		
+		$pageNum = $this->wire->wire()->input->pageNum();
+		$slashed = substr($requestPath, -1) === '/' && strlen($requestPath) > 1;
+		$matchPath = $pathHook['match'];
+		$regexDelim = ''; // populated only for user-specified regex
+		$pageNumArgument = 0; // populate in $arguments when {pageNum} present in match pattern
+	
+		if(strpos('!@#%', $matchPath[0]) !== false) {
+			// already in delimited regex format
+			$regexDelim = $matchPath[0];
+		} else {
+			// needs to be in regex format
+			if(strpos($matchPath, '/') === 0) $matchPath = "^$matchPath";
+			$matchPath = "#$matchPath$#";
+		}
+
+		if(strpos($matchPath, '{pageNum}') !== false) {
+			// the {pageNum} named argument maps to $input->pageNum. remove the {pageNum} argument
+			// from the match path since it is handled differently from other named arguments
+			$find = array('/{pageNum}/', '/{pageNum}', '{pageNum}');
+			$matchPath = str_replace($find, '/', $matchPath);
+			$pathHook['match'] = str_replace($find, '/', $pathHook['match']); 
+			$pageNumArgument = $pageNum;
+		} else if($pageNum > 1) {
+			// hook does not handle pagination numbers above 1
+			return false;
+		}
+
+		if(strpos($matchPath, ':') && strpos($matchPath, '(') !== false) {
+			// named arguments in format “(name: value)” converted to named PCRE capture groups
+			$matchPath = preg_replace('#\(([-_a-z0-9]+):#i', '(?P<$1>', $matchPath);
+		}
+		
+		if(strpos($matchPath, '{') !== false) {
+			// named arguments in format “{name}” converted to named PCRE capture groups
+			// note that the match pattern of any URL segment is assumed for this case
+			$matchPath = preg_replace('#\{([_a-z][-_a-z0-9]*)\}#i', '(?P<$1>[^/]+)', $matchPath); 
+		}
+
+		if(!preg_match($matchPath, $requestPath, $matches)) {
+			// if match fails, try again with trailing slash state reversed
+			if($slashed) {
+				$requestPath2 = rtrim($requestPath, '/');
+			} else {
+				$requestPath2 = "$requestPath/";
+			}
+			if(!preg_match($matchPath, $requestPath2, $matches)) return false;
+		}
+		
+		// check on trailing slash
+		if(strpos($matchPath, '/?') === false) {
+			// either slash or no-slash is required, depending on whether match pattern ends with one
+			$slashRequired = substr(rtrim($pathHook['match'], $regexDelim . '$)+'), -1) === '/';
+			$this->pathHookRedirect = '';
+			if($slashRequired && !$slashed) {
+				// trailing slash required and not present
+				$this->pathHookRedirect = $requestPath . '/';
+				return false;
+			} else if(!$slashRequired && $slashed) {
+				// lack of trailing slash required and one is present
+				$this->pathHookRedirect = rtrim($requestPath, '/');
+				return false;
+			}
+		}
+		
+		// success: at this point the requestPath has matched
+		$arguments['path'] = $arguments[0];
+		if($pageNumArgument) $arguments['pageNum'] = $pageNumArgument;
+
+		foreach($matches as $key => $value) {
+			// populate requested arguments
+			if($key !== 0) $arguments[$key] = $value;
+		}
+		
+		return true;
 	}
 
 	/**
@@ -1034,7 +1280,7 @@ class WireHooks {
 				$object->setLocalHooks($localHooks);
 			} else {
 				// static hook
-				unset($this->staticHooks[$hookClass][$method][$priority]);
+				unset($this->staticHooks[$hookClass][$method][$priority], $this->pathHooks[$hookID]);
 				if(empty($this->staticHooks[$hookClass][$method])) {
 					unset($this->hookClassMethodCache["$hookClass::$method"]);
 				}
@@ -1068,6 +1314,80 @@ class WireHooks {
 	 */
 	public function getAllLocalHooks() {
 		return $this->allLocalHooks;
+	}
+
+	/**
+	 * Return all pending path hooks
+	 *
+	 * @return array
+	 * @since 3.0.173
+	 *
+	 */
+	public function getAllPathHooks() {
+		return $this->pathHooks;
+	}
+
+	/**
+	 * Return whether or not any path hooks are pending
+	 *
+	 * @param string $requestPath Optionally provide request path to determine if any might match (3.0.174+)
+	 * @return bool
+	 * @since 3.0.173
+	 *
+	 */
+	public function hasPathHooks($requestPath = '') {
+		// first pre-filter the requestPath against any words matchPath (filters)
+		if(strlen($requestPath)) return $this->filterPathHooks($requestPath, true);
+		return count($this->pathHooks) > 0;
+	}
+
+	/**
+	 * Return path hooks that have potential to match given request path
+	 * 
+	 * @param string $requestPath
+	 * @param bool $has Specify true to change return value to boolean as to whether any can match (default=false)
+	 * @return array|bool
+	 * @since 3.0.174
+	 * 
+	 */
+	public function filterPathHooks($requestPath, $has = false) {
+		$pathHooks = array();
+		foreach($this->pathHooks as $id => $pathHook) {
+			$fail = false;
+			foreach($pathHook['filters'] as $filter) {
+				$fail = strpos($requestPath, $filter) === false;
+				if($fail) break;
+			}
+			if(!$fail) {
+				$pathHooks[$id] = $pathHook;
+				if($has) break;
+			}
+		}
+		return $has ? count($pathHooks) > 0 : $pathHooks;
+	}
+
+	/**
+	 * Get or set whether path hooks are allowed
+	 * 
+	 * @param bool|null $allow
+	 * @return bool
+	 * @since 3.0.173
+	 * 
+	 */
+	public function allowPathHooks($allow = null) {
+		if($allow !== null) $this->allowPathHooks = (bool) $allow;
+		return $this->allowPathHooks;
+	}
+
+	/**
+	 * Return redirect URL required by an applicable path hook, or blank otherwise
+	 * 
+	 * @return string
+	 * @since 3.0.173
+	 * 
+	 */
+	public function getPathHookRedirect() {
+		return $this->pathHookRedirect;
 	}
 
 	/**

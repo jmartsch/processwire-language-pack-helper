@@ -112,6 +112,22 @@ class Session extends Wire implements \IteratorAggregate {
 	protected $sessionInit = false;
 
 	/**
+	 * Are sessions allowed?
+	 * 
+	 * @var bool|null
+	 * 
+	 */
+	protected $sessionAllow = null;
+
+	/**
+	 * Instance of custom session handler module, when in use (null when not)
+	 * 
+	 * @var WireSessionHandler|null
+	 * 
+	 */
+	protected $sessionHandler = null;
+
+	/**
 	 * Name of key/index within $_SESSION where PW keeps its session data
 	 * 
 	 * @var string
@@ -155,7 +171,7 @@ class Session extends Wire implements \IteratorAggregate {
 	public function __construct(ProcessWire $wire) {
 
 		$wire->wire($this);
-		$this->config = $wire->wire('config'); 
+		$this->config = $wire->wire()->config;
 		$this->sessionKey = $this->className();
 		
 		$instanceID = $wire->getProcessWireInstanceID();
@@ -178,6 +194,8 @@ class Session extends Wire implements \IteratorAggregate {
 		} else {
 			$sessionAllow = true;
 		}
+		
+		$this->sessionAllow = $sessionAllow;
 		
 		if($sessionAllow) {
 			$this->init();
@@ -218,6 +236,20 @@ class Session extends Wire implements \IteratorAggregate {
 	}
 
 	/**
+	 * Is a session login cookie present?
+	 * 
+	 * This only indicates the user was likely logged in at some point, and may not indicate an active login. 
+	 * This method is more self describing version of `$session->hasCookie(true);`
+	 * 
+	 * @return bool
+	 * @since 3.0.175
+	 * 
+	 */
+	public function hasLoginCookie() {
+		return $this->hasCookie(true);
+	}
+
+	/**
 	 * Start the session
 	 *
 	 * Provided here in any case anything wants to hook in before session_start()
@@ -228,7 +260,7 @@ class Session extends Wire implements \IteratorAggregate {
 	 */
 	public function ___init() {
 
-		if($this->sessionInit) return;
+		if($this->sessionInit || !$this->sessionAllow) return;
 		if(!$this->config->sessionName) return;
 		$this->sessionInit = true;
 
@@ -273,7 +305,18 @@ class Session extends Wire implements \IteratorAggregate {
 			}
 		}
 		
-		@session_start();
+		$options = array();
+		$cookieSameSite = $this->sessionCookieSameSite();
+		
+		if(PHP_VERSION_ID < 70300) {
+			$cookiePath = ini_get('session.cookie_path');
+			if(empty($cookiePath)) $cookiePath = '/';
+			$options['cookie_path'] = "$cookiePath; SameSite=$cookieSameSite";
+		} else {
+			$options['cookie_samesite'] = $cookieSameSite;
+		}
+
+		@session_start($options);
 		
 		if(!empty($this->data)) {
 			foreach($this->data as $key => $value) $this->set($key, $value);
@@ -764,23 +807,26 @@ class Session extends Wire implements \IteratorAggregate {
 	}
 
 	/**
-	 * Get the IP address of the current user (IPv4)
-	 * 
+	 * Get the IP address of the current user
+	 *
 	 * ~~~~~
 	 * $ip = $session->getIP();
 	 * echo $ip; // outputs 111.222.333.444
 	 * ~~~~~
-	 * 
-	 * @param bool $int Return as a long integer for DB storage? (default=false)
+	 *
+	 * @param bool $int Return as a long integer? (default=false)
+	 *  - IPv6 addresses cannot be represented as an integer, so please note that using this int option makes it return a CRC32
+	 *    integer when using IPv6 addresses (3.0.184+).
 	 * @param bool|int $useClient Give preference to client headers for IP? HTTP_CLIENT_IP and HTTP_X_FORWARDED_FOR (default=false)
-	 * 	Specify integer 2 to include potential multiple CSV separated IPs (when provided by client).
+	 * 	- Specify integer 2 to include potential multiple CSV separated IPs (when provided by client).
 	 * @return string|int Returns string by default, or integer if $int argument indicates to.
 	 *
 	 */
 	public function getIP($int = false, $useClient = false) {
-		
+
 		$ip = $this->config->sessionForceIP;
-		
+		$ipv6 = false;
+
 		if(!empty($ip)) {
 			// use IP address specified in $config->sessionForceIP and disregard other options
 			$useClient = false;
@@ -788,44 +834,75 @@ class Session extends Wire implements \IteratorAggregate {
 		} else if(empty($_SERVER['REMOTE_ADDR'])) {
 			// when accessing via CLI Interface, $_SERVER['REMOTE_ADDR'] isn't set and trying to get it, throws a php-notice
 			$ip = '127.0.0.1';
-			
-		} else if($useClient) { 
-			if(!empty($_SERVER['HTTP_CLIENT_IP'])) $ip = $_SERVER['HTTP_CLIENT_IP']; 
-				else if(!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) $ip = $_SERVER['HTTP_X_FORWARDED_FOR'];
-				else if(!empty($_SERVER['REMOTE_ADDR'])) $ip = $_SERVER['REMOTE_ADDR']; 
-				else $ip = '0.0.0.0';
+
+		} else if($useClient) {
+			if(!empty($_SERVER['HTTP_CLIENT_IP'])) $ip = $_SERVER['HTTP_CLIENT_IP'];
+			else if(!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) $ip = $_SERVER['HTTP_X_FORWARDED_FOR'];
+			else if(!empty($_SERVER['REMOTE_ADDR'])) $ip = $_SERVER['REMOTE_ADDR'];
+			else $ip = '0.0.0.0';
 			// It's possible for X_FORWARDED_FOR to have more than one CSV separated IP address, per @tuomassalo
 			if(strpos($ip, ',') !== false && $useClient !== 2) {
 				list($ip) = explode(',', $ip);
 			}
 			// sanitize: if IP contains something other than digits, periods, commas, spaces, 
 			// then don't use it and instead fallback to the REMOTE_ADDR. 
-			$test = str_replace(array('.', ',', ' '), '', $ip); 
-			if(!ctype_digit("$test")) $ip = $_SERVER['REMOTE_ADDR'];
+			$test = str_replace(array('.', ',', ' '), '', $ip);
+			if(!ctype_digit("$test")) {
+				if(strpos($test, ':') !== false) {
+					// ipv6 allowed
+					$test = filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6);
+					$ip = $test === false ? $_SERVER['REMOTE_ADDR'] : $test;
+				} else {
+					$ip = $_SERVER['REMOTE_ADDR'];
+				}
+			}
 
 		} else {
-			$ip = $_SERVER['REMOTE_ADDR']; 
+			$ip = $_SERVER['REMOTE_ADDR'];
 		}
-		
+
+		if(strpos($ip, ':') !== false) {
+			// attempt to identify an IPv4 version when an integer required for return value
+			if($int && $ip === '::1') {
+				$ip = '127.0.0.1';
+			} else if($int && strpos($ip, '.') && preg_match('!(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})!', $ip, $m)) {
+				$ip = $m[1]; // i.e. 0:0:0:0:0:ffff:192.1.56.10 => 192.1.56.10
+			} else {
+				$ipv6 = true;
+			}
+		}
+
 		if($useClient === 2 && strpos($ip, ',') !== false) {
 			// return multiple IPs
-			$ips = explode(',', $ip);
-			foreach($ips as $key => $ip) {
-				$ip = ip2long(trim($ip));
-				if(!$int) $ip = long2ip($ip);
-				$ips[$key] = $ip;
+			$ips = array();
+			foreach(explode(',', $ip) as $ip) {
+				if($ipv6) {
+					$ip = filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6);
+					if($ip !== false && $int) $ip = crc32($ip);
+				} else {
+					$ip = ip2long(trim($ip));
+					if(!$int) $ip = long2ip($ip);
+				}
+				if($ip !== false) $ips[] = $ip;
 			}
 			$ip = implode(',', $ips);
-			
+
+		} else if($ipv6) {
+			$ip = filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6);
+			if($ip === false) {
+				$ip = $int ? 0 : '0.0.0.0';
+			} else if($int) {
+				$ip = crc32($ip);
+			}
+
 		} else {
 			// sanitize by converting to and from integer
 			$ip = ip2long(trim($ip));
 			if(!$int) $ip = long2ip($ip);
 		}
-		
+
 		return $ip;
 	}
-
 	/**
 	 * Login a user with the given name and password
 	 *
@@ -905,8 +982,16 @@ class Session extends Wire implements \IteratorAggregate {
 				$this->set('_user', 'challenge', $challenge); 
 				$secure = $this->config->sessionCookieSecure ? (bool) $this->config->https : false;
 				// set challenge cookie to last 30 days (should be longer than any session would feasibly last)
-				setcookie(session_name() . self::challengeSuffix, $challenge, time()+60*60*24*30, '/', 
-					$this->config->sessionCookieDomain, $secure, true); 
+				$this->setCookie(
+					session_name() . self::challengeSuffix,
+					$challenge,
+					time() + 60*60*24*30,
+					'/',
+					$this->config->sessionCookieDomain,
+					$secure,
+					true,
+					$this->config->sessionCookieSameSite
+				);
 			}
 
 			if($this->config->sessionFingerprint) { 
@@ -915,7 +1000,7 @@ class Session extends Wire implements \IteratorAggregate {
 			}
 
 			$this->wire('user', $user); 
-			$this->get('CSRF')->resetAll();
+			$this->CSRF()->resetAll();
 			$this->loginSuccess($user); 
 			$fail = false;
 
@@ -1088,19 +1173,78 @@ class Session extends Wire implements \IteratorAggregate {
 	}
 
 	/**
+	 * Add a SetCookie response header
+	 *
+	 * @param string $name
+	 * @param string|null|false $value
+	 * @param int $expires
+	 * @param string $path
+	 * @param string|null $domain
+	 * @param bool $secure
+	 * @param bool $httponly
+	 * @param string $samesite One of 'Strict', 'Lax', 'None'
+	 * @return bool
+	 * @since 3.0.178
+	 * 
+	 */
+	protected function setCookie($name, $value, $expires = 0, $path = '/', $domain = null, $secure = false, $httponly = false, $samesite = 'Lax') {
+		
+		if(empty($path)) $path = '/';
+	
+		$samesite = $this->sessionCookieSameSite($samesite);
+		
+		if($samesite === 'None') $secure = true;
+
+		if(PHP_VERSION_ID < 70300) {
+			return setcookie($name, $value, $expires, "$path; SameSite=$samesite", $domain, $secure, $httponly);
+		}
+
+		// PHP 7.3+ supports $options array
+		return setcookie($name, $value, array(
+			'expires' => $expires,
+			'path' => $path,
+			'domain' => $domain,
+			'secure' => $secure,
+			'httponly' => $httponly,
+			'samesite' => $samesite,
+		));
+	}
+
+
+	/**
 	 * Remove all cookies used by the session
 	 * 
 	 */
 	protected function removeCookies() {
 		$sessionName = session_name();
+		$challengeName = $sessionName . self::challengeSuffix;
 		$time = time() - 42000;
+		$domain = $this->config->sessionCookieDomain;
 		$secure = $this->config->sessionCookieSecure ? (bool) $this->config->https : false;
+		$samesite = $this->sessionCookieSameSite();
+		
 		if(isset($_COOKIE[$sessionName])) {
-			setcookie($sessionName, '', $time, '/', $this->config->sessionCookieDomain, $secure, true);
+			$this->setCookie($sessionName, '', $time, '/', $domain, $secure, true, $samesite);
 		}
-		if(isset($_COOKIE[$sessionName . self::challengeSuffix])) {
-			setcookie($sessionName . self::challengeSuffix, '', $time, '/', $this->config->sessionCookieDomain, $secure, true);
+		
+		if(isset($_COOKIE[$challengeName])) {
+			$this->setCookie($challengeName, '', $time, '/', $domain, $secure, true, $samesite);
 		}
+	}
+
+	/**
+	 * Get 'SameSite' value for session cookie
+	 * 
+	 * @param string|null $value
+	 * @return string
+	 * @since 3.0.178
+	 * 
+	 */
+	protected function sessionCookieSameSite($value = null) {
+		$samesite = $value === null ? $this->config->sessionCookieSameSite : $value;
+		$samesite = empty($samesite) ? 'Lax' : ucfirst(strtolower($samesite));
+		if(!in_array($samesite, array('Strict', 'Lax', 'None'), true)) $samesite = 'Lax';
+		return $samesite;
 	}
 
 	/**
@@ -1147,15 +1291,29 @@ class Session extends Wire implements \IteratorAggregate {
 	 * ~~~~~
 	 * 
 	 * @param string $url URL to redirect to
-	 * @param bool $http301 Should this be a permanent (301) redirect? (default=true). If false, it is a 302 temporary redirect.
+	 * @param bool|int $status Specify true for 301 permanent redirect, false for 302 temporary redirect, or 
+	 *   in 3.0.166+ you can also specify the status code (integer) rather than boolean. 
+	 *   Default is 301 (permanent). 
 	 *
 	 */
-	public function ___redirect($url, $http301 = true) {
+	public function ___redirect($url, $status = 301) {
+		
+		$page = $this->wire()->page;
+
+		if($status === true || "$status" === "301" || "$status" === "1") {
+			$status = 301;
+		} else if($status === false || "$status" === "302" || "$status" === "0") {
+			$status = 302;
+		} else {
+			$status = (int) $status;
+			// if invalid redirect http status code, fallback to 302
+			if($status < 300 || $status > 399) $status = 302;
+		}
 
 		// if there are notices, then queue them so that they aren't lost
 		if($this->sessionInit) {
-			$notices = $this->wire('notices');
-			if(count($notices)) {
+			$notices = $this->wire()->notices;
+			if($notices && count($notices)) {
 				foreach($notices as $notice) {
 					$this->queueNotice($notice);
 				}
@@ -1163,22 +1321,50 @@ class Session extends Wire implements \IteratorAggregate {
 		}
 
 		// perform the redirect
-		$page = $this->wire('page');
 		if($page) {
-			// ensure ProcessPageView is properly closed down
-			$process = $this->wire('modules')->get('ProcessPageView'); 
-			$process->setResponseType(ProcessPageView::responseTypeRedirect); 
-			$process->finished();
-			// retain modal=1 get variables through redirects (this can be moved to a hook later)
-			if($page->template == 'admin' && $this->wire('input')->get('modal') && strpos($url, '//') === false) {
-				if(!strpos($url, 'modal=')) $url .= (strpos($url, '?') !== false ? '&' : '?') . 'modal=1'; 
+			$process = $this->wire()->process; 
+			if("$process" !== "ProcessPageView") {
+				$process = $this->wire()->modules->get('ProcessPageView');
+			}
+			/** @var ProcessPageView $process */
+			if($process) {
+				// ensure ProcessPageView is properly closed down
+				$process->setResponseType(ProcessPageView::responseTypeRedirect);
+				$process->finished();
+				// retain modal=1 get variables through redirects (this can be moved to a hook later)
+				$input = $this->wire()->input;
+				if($page->template == 'admin' && $input && $input->get('modal') && strpos($url, '//') === false) {
+					if(!strpos($url, 'modal=')) $url .= (strpos($url, '?') !== false ? '&' : '?') . 'modal=1';
+				}
 			}
 		}
-		$statusData = array('redirectUrl' => $url, 'redirectType' => ($http301 ? 301 : 302)); 
-		$this->wire()->setStatus(ProcessWire::statusFinished, $statusData);
-		if($http301) header("HTTP/1.1 301 Moved Permanently");
-		header("Location: $url");
+		
+		$this->wire()->setStatus(ProcessWire::statusFinished, array(
+			'redirectUrl' => $url,
+			'redirectType' => $status, 
+		));
+		
+		// note for 302 redirects we send no header other than 'Location: url'
+		$http = new WireHttp();
+		$this->wire($http);
+		$http->sendStatusHeader($status);
+		$http->sendHeader("Location: $url");
+		
 		exit(0);
+	}
+
+	/**
+	 * Perform a temporary (302) redirect
+	 * 
+	 * This is an alias of `$session->redirect($url, false);` that sends only the
+	 * location header, which translates to a 302 redirect. 
+	 * 
+	 * @param string $url
+	 * @since 3.0.166 
+	 * 
+	 */
+	public function location($url) {
+		$this->redirect($url, false); 
 	}
 
 	/**
@@ -1325,18 +1511,25 @@ class Session extends Wire implements \IteratorAggregate {
 		
 		// prevent multiple calls, just in case
 		$this->skipMaintenance = true; 
-		
-		$historyCnt = (int) $this->config->sessionHistory;
+	
+		$config = $this->wire()->config;
+		$historyCnt = (int) ($config ? $config->sessionHistory : 0);
 		
 		if($historyCnt) {
+		
+			$sanitizer = $this->wire()->sanitizer;
+			$input = $this->wire()->input;
+			$page = $this->wire()->page;
+			
+			if(!$sanitizer || !$input || !$page) return;
 			
 			$history = $this->get('_user', 'history');
 			if(!is_array($history)) $history = array();
 
 			$item = array(
 				'time' => time(),
-				'url'  => $this->wire('sanitizer')->entities($this->wire('input')->httpUrl()),
-				'page' => $this->wire('page')->id,
+				'url'  => $sanitizer->entities($input->httpUrl()),
+				'page' => $page->id,
 			);
 
 			$cnt = count($history); 
@@ -1434,5 +1627,22 @@ class Session extends Wire implements \IteratorAggregate {
 		if(is_null($this->CSRF)) $this->CSRF = $this->wire(new SessionCSRF());
 		return $this->CSRF; 
 	}
+	
+	/**
+	 * Get or set current session handler instance (WireSessionHandler)
+	 *
+	 * #pw-internal
+	 *
+	 * @param WireSessionHandler|null $sessionHandler Specify only when setting, omit to get session handler. 
+	 * @return null|WireSessionHandler Returns WireSessionHandler instance, or…
+	 *   returns null when session handler is not yet known or is PHP (file system)
+	 * @since 3.0.166
+	 *
+	 */
+	public function sessionHandler(WireSessionHandler $sessionHandler = null) {
+		if($sessionHandler) $this->sessionHandler = $sessionHandler;
+		return $this->sessionHandler;
+	}
+
 
 }

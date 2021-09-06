@@ -139,7 +139,7 @@ $config->set('SystemNotifications', array(
  */
 
 $classes = InputfieldWrapper::getClasses();
-$classes['form'] = 'InputfieldFormNoWidths InputfieldFormVertical uk-form-vertical';
+$classes['form'] = 'InputfieldFormVertical uk-form-vertical' . ($adminTheme->ukGrid ? ' InputfieldFormNoWidths' : '');
 $classes['list'] = 'Inputfields uk-grid uk-grid-collapse uk-grid-match';
 $classes['list_clearfix'] = 'uk-clearfix';
 $classes['item_column_width_first'] = 'InputfieldColumnWidthFirst uk-first-column';
@@ -156,9 +156,9 @@ InputfieldWrapper::setMarkup($markup);
 
 if(!$config->get('InputfieldWrapper')) $config->set('InputfieldWrapper', array());
 
-if($adminTheme->noGrid) {
-	$config->InputfieldWrapper('useColumnWidth', 2); // 2=use both style='width:%' and data-colwidth attributes
-} else {
+if($adminTheme->ukGrid) {
 	$config->InputfieldWrapper('useColumnWidth', false); 
+} else {
+	$config->InputfieldWrapper('useColumnWidth', 2); // 2=use both style='width:%' and data-colwidth attributes
 }
 

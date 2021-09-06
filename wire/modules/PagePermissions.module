@@ -9,7 +9,7 @@
  * if(!$page->viewable()) { echo "sorry you can't view this"; }
  * ...and so on...
  * 
- * ProcessWire 3.x, Copyright 2016 by Ryan Cramer
+ * ProcessWire 3.x, Copyright 2021 by Ryan Cramer
  * https://processwire.com
  * 
  * Optional special permissions that are optional (by default, not installed):
@@ -239,14 +239,13 @@ class PagePermissions extends WireData implements Module {
 	 */
 	public function userEditable(Page $page, array $options = array()) {
 		
-		/** @var User $user */
-		$user = $this->wire('user');
-		
 		/** @var Process|ProcessProfile|ProcessPageView|ProcessUser|ProcessPageList|ProcessPageLister $process */
-		$process = $this->wire('process');
 		
-		/** @var Config $config */
-		$config = $this->wire('config');
+		$user = $this->wire()->user;
+		$process = $this->wire()->process;
+		$processName = (string) $process;
+		$config = $this->wire()->config;
+		$guestRoleID = $config->guestUserRolePageID;
 		
 		$defaults = array(
 			'viewable' => false, // specify true if method is being used to determine viewable state
@@ -255,26 +254,58 @@ class PagePermissions extends WireData implements Module {
 		$options = count($options) ? array_merge($defaults, $options) : $defaults;
 	
 		if(!$page->id) return false;
-		if($page->className() != 'User') $page = $this->wire('users')->get($page->id);
+		
+		if(!$page instanceof User) { 
+			$template = $this->wire()->templates->get('user');
+			if($page->className() !== $template->getPageClass(false)) {
+				$page = $this->wire()->users->get($page->id);
+			}
+		}
+		
 		if(!$page || $page instanceof NullPage) return false;
 	
-		if($user->id === $page->id && !$user->isGuest() && $user->hasPermission('profile-edit')) {
+		if($user->id === $page->id && $user->isLoggedin()) {
 			// user is the same as the page being edited or viewed
-			if($process == 'ProcessProfile') {
-				// user editing themself in ProcssProfile
+			$wirePage = $this->wire()->page;
+			$wireProcessName = $wirePage ? "$wirePage->process" : '';
+
+			if(($processName === 'ProcessProfile' || $wireProcessName === 'ProcessProfile') && $user->hasPermission('profile-edit')) {
+				// user editing themself in ProcessProfile
 				return true;
-			} else if($this->wire('page') && $this->wire('page')->process == 'ProcessProfile') {
-				// user editing themself in ProcessProfile, when process not yet established
+			}
+			if($options['viewable'] && $user->hasPermission('user-view-self')) {
+				// user requests to view themselves
 				return true;
-			} else if($process == 'ProcessPageView' && $config->pagefileSecure && $options['viewable']) {
-				// user is viewing a file that is part of their User page when pagefileSecure mode active
-				return $process->getResponseType() == ProcessPageView::responseTypeFile;
 			}
 		}
 
-		// if the current process is something other than ProcessUser, they don't have permission
-		if(!$options['viewable']) {
-			if($process != 'ProcessUser' && (!$process instanceof ProcessPageList) && (!$process instanceof ProcessPageLister)) {
+		if($options['viewable']) {
+			// perform viewable checks rather than editable checks
+			if($page->template->useRoles && $user->hasPermission('page-view', $page)) {
+				// access permission provided by page-view permission configured directly (not inherited) on user template
+				if($user->isLoggedin()) return true;
+			}
+			if($user->hasPermission('user-view-all')) {
+				// user-view-all permission is similar to page-view on the user template but can also be assigned to guest role
+				return true;
+			}
+			if($page->isSuperuser()) {
+				// if superuser role is present then view permission cannot be provided by any other user-view-[role]
+				return $user->isSuperuser() || $user->hasPermission('user-view-superuser');
+			}
+			// check for match between user-view-[role] permission and roles of user being requested
+			$userViewable = false;
+			foreach($page->roles as $role) {
+				// check for "user-view-[roleName]" permissions
+				if($role->id == $guestRoleID) continue;
+				if($user->hasPermission("user-view-$role->name")) $userViewable = true;
+				if($userViewable) break;
+			}
+			if($userViewable) return true;
+			
+		} else {
+			// if the current process is something other than ProcessUser, they don't have permission
+			if($processName !== 'ProcessUser' && (!$process instanceof ProcessPageList) && (!$process instanceof ProcessPageLister)) {
 				return false;
 			}
 		}
@@ -284,12 +315,12 @@ class PagePermissions extends WireData implements Module {
 
 		// if the user page being edited has a superuser role, and the current user doesn't,
 		// never let them edit regardless of any other permissions
-		$superuserRole = $this->wire('roles')->get($config->superUserRolePageID);
+		$superuserRole = $this->wire()->roles->get($config->superUserRolePageID);
 		if($page->roles->has($superuserRole) && !$user->roles->has($superuserRole)) return false;
 
 		// if we reach this point then check if there are more granular user-admin permissions available
 		// special permissions: user-admin-all, and user-admin-[role]
-		$userAdminAll = $this->wire('permissions')->get('user-admin-all');
+		$userAdminAll = $this->wire()->permissions->get('user-admin-all');
 		
 		// if there are no special permissions, then let them through
 		if(!$userAdminAll->id) return true;
@@ -299,7 +330,6 @@ class PagePermissions extends WireData implements Module {
 
 		// there are role-specific permissions in the system, and user must have appropriate one to edit
 		$userEditable = false;
-		$guestRoleID = $config->guestUserRolePageID;
 		$n = 0;
 		foreach($page->roles as $role) {
 			$n++;
@@ -316,8 +346,20 @@ class PagePermissions extends WireData implements Module {
 		
 		return false;
 	}
-	
+
+	/**
+	 * Returns whether the given user ($page) is viewable by the current user
+	 * 
+	 * @param User|Page $page
+	 * @param array $options
+	 * @return bool
+	 * @throws WireException
+	 * 
+	 */
 	public function userViewable(Page $page, array $options = array()) {
+		$user = $this->wire()->user;
+		// user viewing themself
+		if($user->id === $page->id && $user->hasPermission('page-view', $page)) return true;
 		$options['viewable'] = true; 
 		return $this->userEditable($page, $options); 
 	}
@@ -399,7 +441,7 @@ class PagePermissions extends WireData implements Module {
 			$name = $_name;
 			$field = $this->wire('fields')->get($name);
 		}
-		if($field) {
+		if($field && $field instanceof Field) {
 			// delegate to Field::viewable method
 			return $field->useRoles ? $field->viewable($page) : true;
 		} else if($this->wire($name)) {
@@ -431,7 +473,7 @@ class PagePermissions extends WireData implements Module {
 		if(!is_string($name)) return false; 
 		if(!strlen($name)) return true; 
 
-		if($name == 'id' && ($page->status & Page::statusSystemID)) return false; 
+		if($name === 'id' && ($page->status & Page::statusSystemID)) return false; 
 
 		$user = $this->wire('user'); 
 
@@ -441,12 +483,12 @@ class PagePermissions extends WireData implements Module {
 			}
 		}
 		
-		if($name == 'template' || $name == 'templates_id') {
+		if($name === 'template' || $name === 'templates_id') {
 			if($page->template->noChangeTemplate) return false;
 			if(!$user->hasPermission('page-template', $page)) return false; 
 		}
 		
-		if($name == 'name') {
+		if($name === 'name') {
 			// if page has no name (and not homepage), then it needs one, so it is allowed
 			if($page->id > 1 && !strlen($page->name)) return true; 
 			// if page is not yet published, user with page-edit can still change name
@@ -455,16 +497,16 @@ class PagePermissions extends WireData implements Module {
 			return $user->hasPermission('page-rename', $page);
 		}
 
-		if($name == 'parent' || $name == 'parent_id') {
+		if($name === 'parent' || $name === 'parent_id') {
 			if($page->template->noMove) return false; 
 			if(!$user->hasPermission('page-move', $page)) return false; 
 		}
 
-		if($name == 'sortfield') {
+		if($name === 'sortfield') {
 			if(!$user->hasPermission('page-sort', $page)) return false; 
 		}
 
-		if($name == 'roles') {
+		if($name === 'roles') {
 			if(!$user->hasPermission('user-admin')) return false; 
 		}
 		
@@ -479,6 +521,28 @@ class PagePermissions extends WireData implements Module {
 		}
 
 		return true; 
+	}
+
+	/**
+	 * Is given file viewable?
+	 * 
+	 * It is assumed that you have already determined the Page is viewable. 
+	 *
+	 * @param Page $page
+	 * @param Pagefile|string $pagefile
+	 * @return bool|null Returns bool, or null if not known
+	 * @since 3.0.166
+	 *
+	 */
+	protected function fileViewable(Page $page, $pagefile) {
+		if($this->wire()->user->isSuperuser()) return true;
+		if(!$pagefile instanceof Pagefile) {
+			$pagefile = $page->hasFile(basename($pagefile), array('getPagefile' => true));
+			if(!$pagefile) return null;
+		}
+		$field = $pagefile->field;
+		if(!$field) return null;
+		return $this->fieldViewable($page, $field, false);
 	}
 
 	/**
@@ -511,6 +575,11 @@ class PagePermissions extends WireData implements Module {
 	 * - Optionally specify Language object or language name as first argument to check if viewable 
 	 *   in that language (requires LanguageSupportPageNames module).
 	 * - Optionally specify boolean false as first or second argument to bypass template filename check.
+	 * - Optionally specify a Pagefile object or file basename to check if file is viewable. (3.0.166+)
+	 * 
+	 * Returns boolean true or false. If given a Pagefile or file basename, it can also return null if
+	 * the Page itself is viewable but the file did not map to something we recognize as access controlled,
+	 * like a file basename that isn’t present in any file fields on the page. 
 	 *
 	 * @param HookEvent $event
 	 *
@@ -520,11 +589,12 @@ class PagePermissions extends WireData implements Module {
 		/** @var Page $page */
 		$page = $event->object; 
 		$viewable = true; 
-		$user = $this->wire('user'); 
+		$user = $this->wire()->user; 
 		$arg0 = $event->arguments(0); 
 		$arg1 = $event->arguments(1);
 		$field = null; // field name or Field object, if specified as arg0
-		$checkFile = true; // return false if template filename doesn't exist
+		$checkTemplateFile = true; // return false if template filename doesn't exist
+		$pagefile = null;
 		$status = $page->status;
 
 		// allow specifying User instance as argument 0 
@@ -533,16 +603,21 @@ class PagePermissions extends WireData implements Module {
 			if($arg0 instanceof User) {
 				// user specified
 				$user = $arg0;
+			} else if($arg0 instanceof Pagefile || (is_string($arg0) && strpos($arg0, '.'))) {
+				// Pagefile or file basename 
+				$pagefile = $arg0;
+				$checkTemplateFile = false;
 			} else if($arg0 instanceof Field || is_string($arg0)) {
 				// field name, Field object or language name specified
 				// @todo: prevent possible collision of field name and language name
 				$field = $arg0;
-				$checkFile = false;
+				$checkTemplateFile = false;
 			} 
 		} 
+		
 		if($arg0 === false || $arg1 === false) {
 			// bypass template filename check
-			$checkFile = false;
+			$checkTemplateFile = false;
 		}
 
 		// if page has corrupted status, this need not affect viewable access
@@ -552,7 +627,7 @@ class PagePermissions extends WireData implements Module {
 		if($status >= Page::statusUnpublished) {
 			// unpublished pages are not viewable, but see override below this if/else statement
 			$viewable = false;
-		} else if(!$page->template || ($checkFile && !$page->template->filenameExists())) {
+		} else if(!$page->template || ($checkTemplateFile && !$page->template->filenameExists())) {
 			// template file does not exist
 			$viewable = false;
 		} else if($user->isSuperuser()) {
@@ -561,7 +636,7 @@ class PagePermissions extends WireData implements Module {
 		} else if($page->hasField('process') && $page->get('process')) {
 			// delegate access to permissions defined with Process module
 			$viewable = $this->processViewable($page);
-		} else if($page instanceof User && !$user->isGuest() && ($user->hasPermission('user-admin') || $page->id === $user->id)) {
+		} else if($page instanceof User) { // && !$user->isGuest() && ($user->hasPermission('user-admin') || $page->id === $user->id)) {
 			// user administrator or user viewing themself
 			$viewable = $this->userViewable($page); 
 		} else if(!$user->hasPermission("page-view", $page)) {
@@ -574,11 +649,13 @@ class PagePermissions extends WireData implements Module {
 
 		// if the page is editable by the current user, force it to be viewable (if not viewable due to being unpublished)
 		if(!$viewable && !$user->isGuest() && ($status & Page::statusUnpublished)) {
-			if($page->editable() && (!$checkFile || $page->template->filenameExists())) $viewable = true; 
+			if($page->editable() && (!$checkTemplateFile || $page->template->filenameExists())) $viewable = true; 
 		}
 		
 		if($field && $viewable) {
 			$viewable = $this->fieldViewable($page, $field, false);
+		} else if($pagefile && $viewable) {
+			$viewable = $this->fileViewable($page, $pagefile); 
 		}
 
 		$event->return = $viewable;

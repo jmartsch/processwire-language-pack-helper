@@ -219,7 +219,7 @@ function ckeSaveReadyNormal($inputfield) {
 }
 
 /**
- * Mouseover event that activates inline CKEditor instances
+ * Mouseover or focus event that activates inline CKEditor instances
  * 
  * @param event
  * 
@@ -235,6 +235,12 @@ function ckeInlineMouseoverEvent(event) {
 	$t.effect('highlight', {}, 500);
 	$t.attr('contenteditable', 'true');
 	var configName = $t.attr('data-configName');
+	if(event.type == 'focusin') {
+		CKEDITOR.once('instanceReady', function(event) {
+			$(':focus').blur();
+			event.editor.focus();
+		});
+	}
 	var editor = CKEDITOR.inline($(this).attr('id'), ProcessWire.config[configName]);
 	ckeInitEvents(editor);
 	$t.addClass("InputfieldCKEditorLoaded"); 
@@ -332,13 +338,23 @@ $(document).ready(function() {
 		return false;
 	});
 
+	$(document).on('image-edit', '.InputfieldCKEditor', function() {
+		// re-initialize CKE when image-edit event triggers (from InputfieldImage.js) via rpsallis
+		var $editor = $(this).find('.InputfieldCKEditorNormal');
+		$editor.each(function() {
+			var editorID = $(this).attr('id');
+			if(typeof CKEDITOR.instances[editorID] !== 'undefined') CKEDITOR.instances[editorID].destroy();
+			ckeInitNormal(editorID);
+		});
+	});
+
 	/**
 	 * Inline editors
 	 * 
 	 */
 
 	CKEDITOR.disableAutoInline = true; 
-	$(document).on('mouseover', '.InputfieldCKEditorInlineEditor', ckeInlineMouseoverEvent); 
+	$(document).on('mouseover focus', '.InputfieldCKEditorInlineEditor', ckeInlineMouseoverEvent); 
 	$(document).on('submit', 'form.InputfieldForm', function() {
 		ckeSaveReadyInline($(this));
 		// note: not necessary for regular editors since CKE takes care

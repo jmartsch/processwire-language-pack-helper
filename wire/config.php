@@ -100,8 +100,41 @@ $config->debugTools = array(
  * Enable ProcessWire advanced development mode?
  * 
  * Turns on additional options in ProcessWire Admin that aren't applicable in all instances.
- * Be careful with this as some options configured in advanced mode cannot be removed once
- * set (at least not without going directly into the database). 
+ * Be careful with this as some options configured in advanced mode (like system statuses) 
+ * cannot be removed once set (at least not without going directly into the database). Below 
+ * is a summary of what enabling advanced mode adds/changes:
+ * 
+ * Fields (Setup > Fields):
+ * 
+ * - Enables "system" and "permanent" flags as checkboxes on the Advanced tab when editing a field. 
+ * - Makes the admin Setup > Fields dropdown show all fields, including system fields.
+ * - Enables creation of new fields using types only allowed in advanced mode. 
+ * - Enables cloning of system fields. 
+ * - Enables showing of System templates when selecting templates to add field to (Actions tab). 
+ * 
+ * Templates (Setup > Templates): 
+ * 
+ * - Makes the admin Setup > Templates dropdown show all templates, including system templates.
+ * - On the Basics tab, enables you to select a Fieldgroup independent of the Template. 
+ * - Enables you to add "Permanent" flagged fields to a template. 
+ * - When editing a template, makes it show a "System" tab with ability to assign system flag, 
+ *   predefined page class name, cancel of global status, setting to make the "name" field appear 
+ *   in the Content tab of the page editor, option to make page deletions bypass the trash, and 
+ *   option to disable the Settings tab in the page editor.
+ * - Enables you to copy fields from another Fieldgroup maintained by a system template. 
+ * - Makes the "Advanced" tab show API examples with the Inputfield notes.
+ * 
+ * Page Editor:
+ *
+ * - Enables showing of "Object type" Page class name on Settings tab Info fields.
+ * - Enables you to select System or SystemID status for a Page on the Settings tab Status field.
+ * - Enables some template changes for superuser that go beyond configured Family settings.
+ * 
+ * Other:
+ *
+ * - In Modules, enables disable of autoload state for existing autoload module, for debug purposes.
+ * - In Lister, paired with debug mode, shows a fully parsed selector under the Lister table.
+ * - Shows an "Advanced mode" label in the footer of the admin theme. 
  * 
  * #notes Recommended mode is false, except occasionally during ProcessWire core or module development.
  * @var bool
@@ -261,13 +294,13 @@ $config->sessionExpireSeconds = 86400;
  * automatically enabled. 
  *
  * ~~~~~
- * $config->sessionAllow = function($session) {
+ * $config->sessionAllow = function($session) use($config) {
  * 
  *   // if there is a session cookie, a session is likely already in use so keep it going
  *   if($session->hasCookie()) return true;
  * 
  *   // if URL is an admin URL, allow session (replace /processwire/ with your admin URL)
- *   if(strpos($_SERVER['REQUEST_URI'], '/processwire/) === 0) return true;
+ *   if(strpos($config->requestPath(), '/processwire/') === 0) return true;
  * 
  *   // otherwise disallow session
  *   return false;
@@ -386,6 +419,25 @@ $config->sessionCookieSecure = 1;
  *
  */
 $config->sessionCookieDomain = null;
+
+/**
+ * Cookie “SameSite” value for sessions - “Lax” (default) or “Strict”
+ *
+ * - `Lax`: The session cookie will be sent along with the GET requests initiated by third party website.
+ *    This ensures an existing session on this site is maintained when clicking to it from another site.
+ * 
+ * - `Strict`: The session cookie will not be sent along with requests initiated by third party websites.
+ *    If user already has a login session on this site, it won’t be recognized when clicking from another
+ *    site to this one. 
+ * 
+ * The default/recommended value is `Lax`.
+ * 
+ * @var string
+ * @since 3.0.178
+ * @see https://www.php.net/manual/en/session.configuration.php#ini.session.cookie-samesite
+ *
+ */
+$config->sessionCookieSameSite = 'Lax';
 
 /**
  * Number of session history entries to record.
@@ -790,7 +842,7 @@ $config->fileCompilerOptions = array(
 	'chmodDir' => '',  // mode to use for created directories, i.e. "0755"
 	'exclusions' => array(), // exclude filenames or paths that start with any of these
 	'extensions' => array('php', 'module', 'inc'), // file extensions we compile
-	'cachePath' => $config->paths->cache . 'FileCompiler/', // path where compiled files are stored
+	'cachePath' => '', // path where compiled files are stored, or blank for $config->paths->cache . 'FileCompiler/'
 	);
 
 /**
@@ -853,6 +905,8 @@ $config->protectCSRF = true;
  * checked in the API via $input->urlSegment1, $input->urlSegment2, $input->urlSegment3, etc.
  * To use this, your template settings (under the URL tab) must take advantage of it. Only change this
  * number if you need more (or fewer) URL segments for some reason.
+ * 
+ * Do not change this number below 3, as the admin requires up to 3 URL segments.
  * 
  * @var int
  *
@@ -919,7 +973,6 @@ $config->pageNameCharset = 'ascii';
 /**
  * If 'pageNameCharset' is 'UTF8' then specify the whitelist of allowed characters here
  * 
- * To allow any characters, you can make this blank, however using a whitelist is strongly recommended.
  * Please note this whitelist is only used if pageNameCharset is 'UTF8'. 
  * 
  * @var string
@@ -979,6 +1032,26 @@ $config->wireInputOrder = 'get post';
 $config->wireInputLazy = false;
 
 /**
+ * Maximum depth for input variables accessed from $input
+ * 
+ * A value of 1 (or less) means only single dimensional arrays are allowed. For instance, `$a['foo']`
+ * would be allowed (since it is one dimension), but `$a['foo']['bar']` would not because it is 
+ * multi-dimensional to a depth of 2.
+ * 
+ * A value of 2 or higher enables multi-dimensional arrays to that depth. For instance, a value of 2 
+ * would allow `$a['foo']['bar']` and a value of 3 or higher would enable `$a['foo']['bar']['baz']`.
+ * 
+ * Note: if your use case requires multi-dimensional input arrays and you do not have control over
+ * this setting (like if you are a 3rd party module author), or are using a version of PW prior to 
+ * 3.0.178 you can always still access multi-dimensional arrays directly from `$_GET` or `$_POST`. 
+ *
+ * @var int
+ * @since 3.0.178
+ * 
+ */
+$config->wireInputArrayDepth = 1;
+
+/**
  * Options for setting cookies from $input->cookie()->set(...)
  * 
  * Additional details about some of these options can also be found on PHP’s [setcookie](https://www.php.net/manual/en/function.setcookie.php) doc page.
@@ -986,6 +1059,7 @@ $config->wireInputLazy = false;
  * #property int age Max age of cookies in seconds or 0 to expire with session (3600=1hr, 86400=1day, 604800=1week, 2592000=30days, etc.)
  * #property string|null Cookie path or null for PW installation’s root URL (default=null).
  * #property string|null|bool domain Cookie domain: null for current hostname, true for all subdomains of current domain, domain.com for domain and all subdomains, www.domain.com for www subdomain.
+ * #property string samesite When set to “Lax” cookies are preserved on GET requests to this site originated from external links. May also be 'Strict' or 'None' ('secure' option required for 'None'). 3.0.178+
  * #property bool|null secure Transmit cookies only over secure HTTPS connection? (true, false, or null to auto-detect, using true option for cookies set when HTTPS is active).
  * #property bool httponly When true, cookie is http/server-side and not visible to JS code in most browsers.
  * 
@@ -998,6 +1072,7 @@ $config->cookieOptions = array(
 	'path' => null, // Cookie path/URL or null for PW installation’s root URL (default=null).
 	'domain' => null, // Cookie domain: null for current hostname, true for all subdomains of current domain, domain.com for domain and all subdomains, www.domain.com for www subdomain.
 	'secure' => null, // Transmit cookies only over secure HTTPS connection? (true, false, or null to auto-detect, substituting true for cookies set when HTTPS is active).
+	'samesite' => 'Lax', // When set to “Lax” cookies are preserved on GET requests to this site originated from external links. May also be 'Strict' or 'None' ('secure' option required for 'None'). 
 	'httponly' => false, // When true, cookie is http/server-side only and not visible to client-side JS code.
 	'fallback' => true, // If set cookie fails (perhaps due to output already sent), attempt to set at beginning of next request? (default=true)
 );
@@ -1155,7 +1230,67 @@ $config->dbQueryLogMax = 500;
  */
 $config->dbStripMB4 = false;
 
-
+/**
+ * Optional settings for read-only “reader” database connection 
+ * 
+ * All `$config->db*` settings above are for a read/write database connection. You can 
+ * optionally maintain a separate read-only database connection to reduce costs and 
+ * allow for further database scalability. Use of this feature requires an environment 
+ * that supports a separate read-only database connection to the same database used by the
+ * read/write connection. When enabled, ProcessWire will direct all non-writing queries to 
+ * the read-only connection, while queries that write to the database are directed to the
+ * read/write connection. 
+ * 
+ * Specify one or more existing `$config->db*` settings in the array to use that value for
+ * the read-only connection. To enable a separate read-only database connection, this array
+ * must contain at minimum a `host` or `socket` entry. Beyond that, values not present in 
+ * this array will be pulled from the existing `$config->db*` settings. Note, when specifying
+ * settings in this array, omit the `db` prefix and use lowercase for the first letter. For
+ * example, use `host` rather than `dbHost`, `name` rather than `dbName`, etc.
+ * 
+ * When using this feature, you may want to exclude your admin from it, as the admin is an
+ * environment that's designed for both read and write, so there's less reason to maintain
+ * separate read-only and read/write connections in the admin. See the examples below.
+ * 
+ * For more details see: https://processwire.com/blog/posts/pw-3.0.175/
+ * 
+ * ~~~~~
+ * // allow read-only database connection always…
+ * $config->dbReader = [ 
+ *   'host' => 'readonly.mydb.domain.com' 
+ * ];
+ * 
+ * // …or, use read-only connection only if not in the admin…
+ * if(!$config->requestPath('/processwire/')) {
+ *   $config->dbReader = [ 'host' => 'readonly.mydb.domain.com' ];
+ * }
+ *
+ * // …or limit read-only to GET requests, exclude admin and contact page… 
+ * $skipPaths = [ '/processwire/', '/contact/' ];
+ * if($config->requestMethod('GET') && !$config->requestPath($skipPaths)) {
+ *   $config->dbReader = [ 'host' => 'readonly.mydb.domain.com' ];
+ * }
+ * 
+ * // to have PW randomly select from multiple DB readers, nest the arrays (3.0.176+)
+ * // if a connection fails, PW will try another randomly till it finds one that works
+ * $config->dbReader = [
+ *   [ 'host' => 'mydb1.domain.com' ],
+ *   [ 'host' => 'mydb2.domain.com' ],
+ *   [ 'host' => 'mydb3.domain.com' ],
+ * ];
+ * ~~~~~
+ * 
+ * @var array
+ * @since 3.0.175
+ * @see https://processwire.com/blog/posts/pw-3.0.175/
+ *
+ */
+$config->dbReader = array(
+	// 'host' => 'readonly.mydb.domain.com',
+	// 'port' => 3306, 
+	// 'name' => 'mydb',
+	// …etc., though most likely you will only need 'host' entry to setup a reader
+);
 
 /*** 8. MODULES *********************************************************************************/
 
@@ -1397,6 +1532,35 @@ $config->defaultAdminTheme = 'AdminThemeDefault';
  *
  */
 $config->adminEmail = '';
+
+/**
+ * Settings specific to AdminThemeUikit
+ * 
+ * The settings shown below are only configured with this setting and not with the module config.
+ * 
+ * Please note, in the `customLessFiles` and `customCssFile` settings, the paths `/site/templates/`, 
+ * `/site/assets/`, and `/site/modules/` are converted to their actual values at runtime (if different). 
+ * Any other paths are left as-is, but must be relative to the ProcessWire installation root. Meaning,
+ * anything in /site/ must start with /site/ and not /subdir/site/ or /path/to/site/, regardless of 
+ * whether ProcessWire is running from the domain root or a subdirectory.
+ * 
+ * @var array
+ * @since 3.0.179
+ * 
+ * #property string style Admin theme base style: 'reno', 'rock', blank for system default
+ * #property bool recompile Specify true for one request to force recompile of admin LESS to CSS in that request. Remember to set back to false.
+ * #property bool compress Compress compiled CSS?
+ * #property array customLessFiles Custom .less files to include, relative to PW installation root.
+ * #property string customCssFile Target custom .css file to compile custom .less file(s) to. 
+ * 
+ */
+$config->AdminThemeUikit = array(
+	'style' => '',
+	'recompile' => false,
+	'compress' => true, 
+	'customLessFiles' => array('/site/templates/admin.less'), 
+	'customCssFile' => '/site/assets/admin.css',
+);
 
 /**
  * Fatal error HTML

@@ -90,7 +90,7 @@ class InputfieldDatetimeSelect extends InputfieldDatetimeType {
 
 		for($n = 1; $n <= 12; $n++) {
 			$monthFormat = $abbreviate ? '%b' : '%B';
-			$monthLabel = $sanitizer->entities(strftime($monthFormat, mktime(0, 0, 0, $n)));
+			$monthLabel = $sanitizer->entities(strftime($monthFormat, mktime(0, 0, 0, $n, 1)));
 			$months->addOption($n, $monthLabel);
 		}
 
@@ -165,7 +165,7 @@ class InputfieldDatetimeSelect extends InputfieldDatetimeType {
 			'day' => (int) $input[$name . '__d'],
 		);
 
-		if(!strlen(trim("$a[month]$a[day]$a[year]"))) {
+		if(!strlen(trim("$a[month]$a[day]$a[year]", "0"))) {
 			// empty value
 			$this->setAttribute('value', '');
 			return '';

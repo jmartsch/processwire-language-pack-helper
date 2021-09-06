@@ -111,7 +111,8 @@ class AdminThemeUikitConfigHelper extends Wire {
 		$f->label = $this->_('Logo image file');
 		$f->description = $defaultFileDesc;
 		$f->notes = $defaultFileNote .
-			$this->_('File should be PNG, GIF, JPG or SVG, on transparent background, and at least 100px in both dimensions.');
+			$this->_('File should be PNG, GIF, JPG or SVG, on transparent background, and at least 100px in both dimensions.') . ' ' . 
+			sprintf($this->_('If using SVG, you may optionally append “?uk-svg” to URL to make it add the [uk-svg](%s) attribute.'), 'https://getuikit.com/docs/svg');  
 		$f->collapsed = Inputfield::collapsedBlank;
 		$f->icon = 'file-image-o';
 		$fieldset->add($f);
@@ -176,12 +177,12 @@ class AdminThemeUikitConfigHelper extends Wire {
 		
 		/** @var InputfieldRadios $f */
 		$f = $modules->get('InputfieldRadios');
-		$f->attr('id+name', 'noGrid');
+		$f->attr('id+name', 'ukGrid');
 		$f->label = $this->_('Inputfield column widths');
 		$f->notes = $this->_('Choose option B if you are having any trouble achieving intended Inputfield column widths.');
-		$f->addOption(0, 'A: ' . $this->_('Uikit uk-width classes (up-to 6 columns)'));
-		$f->addOption(1, 'B: ' . $this->_('Percentage-based widths (additional flexibility)'));
-		$f->attr('value', (int) $adminTheme->get('noGrid'));
+		$f->addOption(1, 'A: ' . $this->_('Uikit uk-width classes (up-to 6 columns)'));
+		$f->addOption(0, 'B: ' . $this->_('Percentage-based widths (additional flexibility)'));
+		$f->attr('value', (int) $adminTheme->get('ukGrid'));
 		$f->columnWidth = 50;
 		$fieldset->add($f);
 
@@ -218,6 +219,9 @@ class AdminThemeUikitConfigHelper extends Wire {
 		$fieldset2 = $modules->get('InputfieldFieldset');
 		$fieldset2->label = $this->_('Advanced');
 		$fieldset2->collapsed = Inputfield::collapsedBlank;
+		$fieldset2->description = 
+			$this->_('Most advanced settings are available from the `$config->AdminThemeUikit` settings array.') . ' ' . 
+			$this->_('You can find it in /wire/config.php. Copy to your /site/config.php file to modify it.');
 		$fieldset->add($fieldset2);
 
 		/** @var InputfieldText $f */
@@ -226,10 +230,12 @@ class AdminThemeUikitConfigHelper extends Wire {
 		$f->attr('value', $adminTheme->get('cssURL'));
 		$f->label = $this->_('Primary CSS file');
 		$f->description = $defaultFileDesc . ' ' .
-			$this->_('We do not recommend changing this unless you are an admin theme developer.');
+			$this->_('We do not recommend changing this unless you are an admin theme developer.') . ' ' . 
+			$this->_('Warning: this will override custom `$config->AdminThemeUikit` settings, base style and custom styles.'); 
 		$f->notes = $defaultFileNote . " " .
 			"[uikit.pw.css](" . $modules->wire('config')->urls('AdminThemeUikit') . "uikit/dist/css/uikit.pw.css)";
 		$f->icon = 'file-code-o';
+		$f->collapsed = Inputfield::collapsedBlank;
 		$fieldset2->add($f);
 
 		/** @var InputfieldFieldset $fieldset */
@@ -319,7 +325,25 @@ class AdminThemeUikitConfigHelper extends Wire {
 		}
 		$f->attr('value', $adminTheme->offsetTypes);
 		$fieldset->add($f);
-
+		
+		/** @var InputfieldRadios $f */
+		$f = $modules->get('InputfieldRadios');
+		$f->attr('name', 'toggleBehavior');
+		$f->label = $this->_('Inputfield label toggle behavior'); 
+		$f->icon = 'eye-slash';
+		$f->description = 
+			$this->_('Inputfield elements in ProcessWire can have an open or closed state.') . ' ' . 
+			$this->_('This setting determines what happens when a user clicks any Inputfield label, which appears as a header above the input.') . ' ' . 
+			$this->_('The “Standard” option makes a click of a label on an open Inputfield focus the input element, a standard HTML form behavior.') . ' ' . 
+			$this->_('While a click of a closed Inputfield label will open and then focus the Inputfield (and close it when clicked again).') . ' ' . 
+			$this->_('The “Consistent” option makes the Inputfield label always behave consistently as an open/close toggle, regardless of what state the Inputfield is in.');
+		$f->notes = $this->_('Regardless of what setting you choose, the toggle icon in the upper right of each Inputfield always toggles the open/closed state.'); 
+		$f->addOption(0, $this->_('Standard'));
+		$f->addOption(1, $this->_('Consistent')); 
+		$f->optionColumns = 1;
+		$f->val($adminTheme->toggleBehavior); 
+		$fieldset->add($f);	
+		
 		/** @var InputfieldCheckboxes $f */
 		/*
 		$f = $modules->get('InputfieldCheckbox');

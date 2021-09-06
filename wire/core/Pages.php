@@ -74,7 +74,6 @@
  *
  * TO-DO
  * =====
- * @todo Add a getCopy method that does a getById($id, array('cache' => false) ?
  * @todo Update saveField to accept array of field names as an option. 
  *
  */
@@ -118,7 +117,7 @@ class Pages extends Wire {
 	 * 
 	 */
 	protected $loader;
-
+	
 	/**
 	 * @var PagesEditor
 	 * 
@@ -150,6 +149,12 @@ class Pages extends Wire {
 	protected $parents;
 
 	/**
+	 * @var PagesRaw
+	 *
+	 */
+	protected $raw;
+
+	/**
 	 * Array of PagesType managers
 	 * 
 	 * @var PagesType[]
@@ -171,6 +176,7 @@ class Pages extends Wire {
 		$this->cacher = $this->wire(new PagesLoaderCache($this));
 		$this->trasher = null;
 		$this->editor = null;
+		$this->raw = null;
 	}
 	
 	/**
@@ -327,6 +333,86 @@ class Pages extends Wire {
 	}
 
 	/**
+	 * Find pages and specify which fields to join (overriding configured autojoin settings)
+	 * 
+	 * This is a useful optimization when you know exactly which fields you will be using from the returned
+	 * pages and you want to have their values joined into the page loading query to reduce overhead. Note
+	 * that this overrides the configured autojoin settings in ProcessWire fields. 
+	 * 
+	 * If a particular page in the returned set of pages was already loaded before this method call,
+	 * then the one already in memory will be used rather than this method loading another copy of it. 
+	 * 
+	 * ~~~~~
+	 * // 1. Example of loading blog posts where we want to join title, date, summary:
+	 * $posts = $pages->findJoin("template=blog-post", [ 'title', 'date', 'summary' ]); 
+	 * 
+	 * // 2. You can also specify the join fields as a CSV string:
+	 * $posts = $pages->findJoin("template=blog-post", 'title, date, summary'); 
+	 * 
+	 * // 3. You can also use the join functionality on a regular $pages->find() by specifying 
+	 * // property 'join' or 'field' in the selector. The words 'join' and 'field' are aliases
+	 * // of each other here, just in case you have an existing field with one of those names. 
+	 * // Otherwise, use whichever makes more sense to you. The following examples demonstrate
+	 * // this and all do exactly the same thing as examples 1 and 2 above:
+	 * $posts = $pages->find("template=blog-post, join=title|date|summary");
+	 * $posts = $pages->find("template=blog-post, field=title|date|summary");
+	 * $posts = $pages->find("template=blog-post, join=title, join=date, join=summary");
+	 * $posts = $pages->find("template=blog-post, field=title, field=date, field=summary");
+	 *
+	 * // 4. Let’s say you want to load pages with NO autojoin fields, here is how.  
+	 * // The following loads all blog-post pages and prevents ANY fields from being joined,
+	 * // even if they are configured to be autojoin in ProcessWire:
+	 * $posts = $pages->findJoin("template=blog-post", false);
+	 * $posts = $pages->find("template=blog-post, join=none"); // same as above
+	 * ~~~~~
+	 * 
+	 * #pw-group-retrieval
+	 * 
+	 * @param string|array|Selectors $selector
+	 * @param array|string|bool $joinFields Array or CSV string of field names to autojoin, or false to join none.
+	 * @param array $options
+	 * @return PageArray
+	 * @since 3.0.172
+	 * 
+	 */
+	public function findJoin($selector, $joinFields, $options = array()) {
+		
+		$fields = $this->wire()->fields;
+	
+		if($joinFields === false) {
+			$name = 'none';
+			while($fields->get($name)) $name .= 'X';
+			$joinFields = array($name);
+		} else if(empty($joinFields)) {
+			$joinFields = array();
+		} else if(!is_array($joinFields)) {
+			$joinFields = (string) $joinFields;
+			if(strpos($joinFields, ',') !== false) {
+				$joinFields = explode(',', $joinFields);
+			} else if(strpos($joinFields, '|') !== false) {
+				$joinFields = explode('|', $joinFields);
+			} else {
+				$joinFields = array($joinFields);
+			}
+		}
+		
+		foreach($joinFields as $key => $name) {
+			if(is_int($name) || ctype_digit($name)) {
+				$field = $fields->get($name);
+				if(!$field) continue;
+				$name = $field->name;
+			} else if(strpos($name, '.') !== false) {
+				list($name,) = explode('.', $name, 2); // subfields not allowed
+			}
+			$joinFields[$key] = trim($name);
+		}
+		
+		$options['joinFields'] = $joinFields;
+		
+		return $this->find($selector, $options);
+	}
+
+	/**
 	 * Like find() except returns array of IDs rather than Page objects
 	 * 
 	 * - This is a faster method to use when you only need to know the matching page IDs. 
@@ -352,6 +438,7 @@ class Pages extends Wire {
 	 * @param array|bool|int|string $options Options to modify behavior. 
 	 *  - `verbose` (bool|int|string): Specify true to make return value array of associative arrays, each with id, parent_id, templates_id. 
 	 *    Specify integer `2` or string `*` to return verbose array of associative arrays, each with all columns from pages table. 
+	 *  - `indexed` (bool): Index by page ID? (default=false) Added 3.0.172
 	 *  - The verbose option above can also be specified as alternative to the $options argument.
 	 *  - See `Pages::find()` $options argument for additional options. 
 	 * @return array Array of page IDs, or in verbose mode: array of arrays, each with id, parent_id and templates_id keys.
@@ -376,7 +463,98 @@ class Pages extends Wire {
 		}
 		/** @var array $ids */
 		$ids = $this->find($selector, $options);
+		if(!empty($options['indexed'])) {
+			$a = array();
+			foreach($ids as $value) {
+				$id = $verbose ? $value['id'] : $value;
+				$a[$id] = $value;
+			}
+			$ids = $a;
+		}
 		return $ids;
+	}
+	
+	/**
+	 * Find pages and return raw data from them in a PHP array 
+	 * 
+	 * Note that the data returned from this method is raw and unformatted, directly
+	 * as it exists in the database. In most cases you should use `$pages->find()` instead,
+	 * but this method provides a convenient alternative for some cases. 
+	 * 
+	 * The `$selector` argument can be any page-finding selector that you would provide
+	 * to a regular `$pages->find()` call. The most interesting stuff relates to the 
+	 * `$field` argument though, which is what the rest of this section looks at: 
+	 * 
+	 * If you omit the `$field` argument, it will return all data for the found pages in 
+	 * an array where the keys are the page IDs and the values are associative arrays 
+	 * containing all of each page raw field and property values indexed by name…
+	 * `$a = $pages->findRaw("template=blog");` …but findRaw() is more useful for cases 
+	 * where you want to retrieve specific things without having to load the entire page 
+	 * (or its data). Below are a few examples of how you can do this. 
+	 * 
+	 * ~~~~~
+	 * // If you provide a string (field name) for `$field`, then it will return an 
+	 * // array with the values of the `data` column of that field. The `$field` can 
+	 * // also be the name of a native pages table property like `id` or `name`. 
+	 * $a = $pages->findRaw("template=blog", "title"); 
+	 * 
+	 * // The above would return an array of blog page titles indexed by page ID. If 
+	 * // you provide an array for `$field` then it will return an array for each page, 
+	 * // where each of those arrays is indexed by the field names you requested.
+	 * $a = $pages->findRaw("template=blog", [ "title", "date" ]); 
+	 * 
+	 * // You may specify field name(s) like `field.subfield` to retrieve a specific 
+	 * // column/subfield. When it comes to Page references or Repeaters, the subfield 
+	 * // can also be the name of a field that exists on the Page reference or repeater. 
+	 * $a = $pages->findRaw("template=blog", [ "title", "categories.title" ]); 
+	 * 
+	 * // You can also use this format below to get multiple subfields from one field:
+	 * $a = $pages->findRaw("template=blog", [ "title", "categories" => [ "id", "title" ] ]); 
+	 * 
+	 * // You can optionally rename fields in the returned value like this below, which
+	 * // asks the 'title' field to have the name 'headline' in return value (3.0.176+):
+	 * $a = $pages->findRaw("template=blog", [ "title" => "headline" ]); 
+	 * 
+	 * // You may specify wildcard field name(s) like `field.*` to return all columns 
+	 * // for `field`. This retrieves all columns from the field’s table. This is 
+	 * // especially useful with fields like Table or Combo that might have several 
+	 * // different columns: 
+	 * $a = $pages->findRaw("template=villa", "rates_table.*" ); 
+	 * 
+	 * // If you prefer, you can specify the field name(s) in the selector (3.0.173+): 
+	 * $a = $pages->findRaw("template=blog, field=title");
+	 * $a = $pages->findRaw("template=blog, field=title|categories.title"); 
+	 * 
+	 * // Specify “objects=1” in selector to use objects rather than associative arrays 
+	 * // for pages and fields (3.0.174+):
+	 * $a = $pages->findRaw("template=blog, field=title|categories.title, objects=1"); 
+	 * 
+	 * // Specify “entities=1” to entity encode all string values:
+	 * $a = $pages->findRaw("template=blog, field=title|summary, entities=1");
+	 * 
+	 * // Specify “entities=field” or “entities=field1|field2” to entity encode just 
+	 * // the specific fields that you name (3.0.174+): 
+	 * $a = $pages->findRaw("template=blog, entities=title|summary"); 
+	 * 
+	 * // If you prefer, options can also be enabled this way (3.0.174+):
+	 * $a = $pages->findRaw("template=blog, options=objects|entities"); 
+	 * ~~~~~
+	 * 
+	 * #pw-advanced
+	 * #pw-group-retrieval
+	 *
+	 * @param string|array|Selectors|int $selector Page matching selector or page ID
+	 * @param string|array|Field $field Name of field/property to get, or array of them, or omit to get all (default='')
+	 *   Note: this argument may also be specified in the $selector argument as "field=foo" or "field=foo|bar|baz" (3.0.173+).
+	 * @param array $options Options to adjust behavior (may also be specified in selector, i.e. “objects=1, entities=foo|bar”)
+	 *  - `objects` (bool): Use objects rather than associative arrays? (default=false) 3.0.174+
+	 *  - `entities` (bool|array): Entity encode string values? True or 1 to enable, or specify array of field names. (default=false) 3.0.174+
+	 * @return array
+	 * @since 3.0.172
+	 *
+	 */
+	public function findRaw($selector, $field = '', $options = array()) {
+		return $this->raw()->find($selector, $field, $options); 
 	}
 
 	/**
@@ -407,6 +585,58 @@ class Pages extends Wire {
 		return $this->loader->get($selector, $options); 
 	}
 	
+	/**
+	 * Get single page and return raw data in an associative array
+	 *
+	 * Note that the data returned from this method is raw and unformatted, directly as it exists in the database. 
+	 * In most cases you should use `$pages->get()` instead, but this method is a convenient alternative for some cases. 
+	 *
+	 * Please see the documentation for the `$pages->findRaw()` method, which all applies to this method as well.
+	 * The biggest difference is that this method returns data for just 1 page, unlike `$pages->findRaw()` which can
+	 * return data for many pages at once. 
+	 * 
+	 * #pw-advanced
+	 *
+	 * @param string|array|Selectors|int $selector Page matching selector or page ID
+	 * @param string|array|Field $field Name of field/property to get, or array of them, or omit to get all (default='')
+	 * @param array $options
+	 * @return array
+	 *
+	 */
+	public function getRaw($selector, $field = '', $options = array()) {
+		return $this->raw()->get($selector, $field, $options);
+	}
+	
+	/**
+	 * Get a fresh, non-cached copy of a Page from the database
+	 *
+	 * This method is the same as `$pages->get()` except that it skips over all memory caches when loading a Page.
+	 * Meaning, if the Page is already in memory, it doesn’t use the one in memory and instead reloads from the DB.
+	 * Nor does it place the Page it loads in any memory cache. Use this method to load a fresh copy of a page
+	 * that you might need to compare to an existing loaded copy, or to load a copy that won’t be seen or touched
+	 * by anything in ProcessWire other than your own code.
+	 *
+	 * ~~~~~
+	 * $p1 = $pages->get(1234);
+	 * $p2 = $pages->get($p1->path);
+	 * $p1 === $p2; // true: same Page instance
+	 *
+	 * $p3 = $pages->getFresh($p1);
+	 * $p1 === $p3; // false: same Page but different instance
+	 * ~~~~~
+	 *
+	 * #pw-advanced
+	 *
+	 * @param Page|string|array|Selectors|int $selectorOrPage Specify Page to get copy of, selector or ID
+	 * @param array $options Options to modify behavior
+	 * @return Page|NullPage
+	 * @since 3.0.172
+	 *
+	 */
+	public function getFresh($selectorOrPage, $options = array()) {
+		return $this->loader()->getFresh($selectorOrPage, $options);
+	}
+
 	/**
 	 * Get one ID of page matching given selector with no exclusions, like get() but returns ID rather than a Page
 	 *
@@ -925,6 +1155,12 @@ class Pages extends Wire {
 	 *  - `getID` (int): Specify true to just return the page ID (default=false).
 	 *  - `useLanguages` (bool): Specify true to allow retrieval by language-specific paths (default=false).
 	 *  - `useHistory` (bool): Allow use of previous paths used by the page, if PagePathHistory module is installed (default=false).
+	 *  - `allowUrl` (bool): Allow getting page by path OR url? Specify false to find only by path. This option only applies if
+	 *     the site happens to run from a subdirectory. (default=true) 3.0.184+
+	 *  - `allowPartial` (bool): Allow partial paths to match? (default=true) 3.0.184+
+	 *  - `allowUrlSegments` (bool): Allow paths with URL segments to match? When true and page match cannot be found, the closest
+	 *     parent page that allows URL segments will be returned. Found URL segments are populated to a `_urlSegments` array
+	 *     property on the returned page object. This also cancels the allowPartial setting. (default=false) 3.0.184+
 	 * @return Page|int
 	 * @since 3.0.6
 	 *
@@ -987,17 +1223,23 @@ class Pages extends Wire {
 	 * ~~~~~
 	 * 
 	 * #pw-group-manipulation
-	 *
-	 * @param Page|PageArray|array $pages May be Page, PageArray or array of page IDs (integers).
-	 * @param null|int|string $time Omit (null) to update to now, or specify unix timestamp or strtotime() recognized time string
-	 * @param string $type Date type to update, one of 'modified', 'created' or 'published' (default='modified') Added 3.0.146
+	 * 
+	 * @param Page|PageArray|array $pages May be Page, PageArray or array of page IDs (integers)
+	 * @param null|int|string|array $options Omit (null) to update to now, or unix timestamp or strtotime() recognized time string,
+	 *  or if you do not need this argument, you may optionally substitute the $type argument here,
+	 *  or in 3.0.183+ you can also specify array of options here instead:
+	 *  - `time` (string|int|null): Unix timestamp or strtotime() recognized string to use, omit for use current time (default=null)
+	 *  - `type` (string): One of 'modified', 'created', 'published' (default='modified')
+	 *  - `user` (bool|User): True to also update modified/created user to current user, or specify User object to use (default=false)
+	 * @param string $type Date type to update, one of 'modified', 'created' or 'published' (default='modified') Added 3.0.147
+	 *  Skip this argument if using options array for previous argument or if using the default type 'modified'.
 	 * @throws WireException|\PDOException if given invalid format for $modified argument or failed database query
 	 * @return bool True on success, false on fail
 	 * @since 3.0.0
 	 *
 	 */
-	public function ___touch($pages, $time = null, $type = 'modified') {
-		return $this->editor()->touch($pages, $time, $type);
+	public function ___touch($pages, $options = null, $type = 'modified') {
+		return $this->editor()->touch($pages, $options, $type);
 	}
 	
 	/**
@@ -1560,6 +1802,18 @@ class Pages extends Wire {
 	public function parents() {
 		if(!$this->parents) $this->parents = $this->wire(new PagesParents($this));
 		return $this->parents;
+	}
+
+	/**
+	 * @return PagesRaw
+	 * @since 3.0.172
+	 *
+	 * #pw-internal
+	 *
+	 */
+	public function raw() {
+		if(!$this->raw) $this->raw = $this->wire(new PagesRaw($this));
+		return $this->raw;
 	}
 
 	/**

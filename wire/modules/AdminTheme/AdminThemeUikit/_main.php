@@ -13,11 +13,12 @@
 /** @var Modules $modules */
 /** @var Notices $notices */
 /** @var Page $page */
-/** @var Process $process */
+/** @var Process $proc;ess */
 /** @var Sanitizer $sanitizer */
 /** @var WireInput $input */
 /** @var Paths $urls */
 /** @var string $layout */
+/** @var Process $process */
 
 if(!defined("PROCESSWIRE")) die();
 
@@ -29,7 +30,7 @@ if(!isset($content)) $content = '';
 	/* this intentionally on a separate line */ ?>">
 <head>
 	<?php 
-	include($config->paths->adminTemplates . '_head.php');
+	include(__DIR__ . '/_head.php');
 	echo $adminTheme->renderExtraMarkup('head'); 
 	?>
 </head>
@@ -69,7 +70,7 @@ if(!isset($content)) $content = '';
 				$headline = $adminTheme->getHeadline();
 				$headlinePos = strpos($content, ">$headline</h1>");
 				if(!$adminTheme->isModal && ($headlinePos === false || $headlinePos < 500)) {
-					echo "<h1 class='uk-margin-remove-top'>$headline</h1>";
+					echo "<h1 id='pw-content-title' class='uk-margin-remove-top'>$headline</h1>";
 				}
 				?>
 				

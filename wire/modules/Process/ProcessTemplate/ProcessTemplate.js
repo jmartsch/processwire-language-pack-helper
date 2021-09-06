@@ -351,6 +351,7 @@ function ProcessTemplateAsmSelect() {
 			// eventData is provided by a change event triggered from asmSelect plugin after a sort or select event
 			if(typeof eventData == "undefined") return;
 			if(typeof eventData.type == "undefined") return;
+			if(eventData.type === 'add') $inputfield.addClass('field-added'); 
 			if(eventData.type != 'sort') return;
 
 			// update row identifications after any changes
@@ -430,9 +431,8 @@ function ProcessTemplate() {
 			if($("#useRoles_1:checked").length > 0) {
 				$("#wrap_redirectLogin").hide();
 				$("#wrap_guestSearchable").hide();
-				$("#useRolesYes").slideDown();
-				$("#wrap_useRoles > label").click();
-				// $("input.viewRoles").attr('checked', 'checked'); // JQM
+				$("#useRolesYes").slideDown(400, function(){ $(this).css('overflow','visible') });
+				// $("#wrap_useRoles > label").click();
 				$("input.viewRoles").prop('checked', true);
 			} else {
 				$("#useRolesYes").slideUp();

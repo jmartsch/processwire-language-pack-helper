@@ -45,11 +45,22 @@ class User extends Page {
 	 *
 	 */
 	public function __construct(Template $tpl = null) {
+		if(!$tpl) $this->template = $this->wire()->templates->get('user');
+		$this->_parent_id = $this->wire()->config->usersPageID; 
 		parent::__construct($tpl); 
-		if(is_null($tpl)) {
-			$this->template = $this->wire('templates')->get('user');
-		}
-		if(!$this->parent_id) $this->set('parent_id', $this->wire('config')->usersPageID); 
+	}
+
+	/**
+	 * Wired to API
+	 * 
+	 * @throws WireException
+	 * 
+	 */
+	public function wired() {
+		parent::wired();
+		$template = $this->wire()->templates->get('user');
+		if($template !== $this->template && (!$this->template || $this->template->name === 'user')) $this->template = $template;
+		$this->_parent_id = $this->wire()->config->usersPageID; 
 	}
 	
 	/**
@@ -66,7 +77,8 @@ class User extends Page {
 	 *
 	 */
 	public function hasRole($role) {
-		
+	
+		/** @var PageArray $roles */
 		$roles = $this->get('roles');
 		$has = false; 
 		
@@ -113,7 +125,7 @@ class User extends Page {
 	 *
 	 */
 	public function addRole($role) {
-		if(is_string($role) || is_int($role)) $role = $this->wire('roles')->get($role); 
+		if(is_string($role) || is_int($role)) $role = $this->wire()->roles->get($role); 
 		if(is_object($role) && $role instanceof Role) {
 			$this->get('roles')->add($role); 
 			return true; 
@@ -137,7 +149,7 @@ class User extends Page {
 	 *
 	 */
 	public function removeRole($role) {
-		if(is_string($role) || is_int($role)) $role = $this->wire('roles')->get($role); 
+		if(is_string($role) || is_int($role)) $role = $this->wire()->roles->get($role); 
 		if(is_object($role) && $role instanceof Role) {
 			$this->get('roles')->remove($role); 
 			return true; 
@@ -169,13 +181,14 @@ class User extends Page {
 	 */
 	public function hasPermission($name, $context = null) {
 		// This method serves as the public interface to the hasPagePermission and hasTemplatePermission methods.
+		$hooks = $this->wire()->hooks;
 		
 		if($context === null || $context instanceof Page) {
-			$hook = $this->wire('hooks')->isHooked('hasPagePermission()');
+			$hook = $hooks->isHooked('hasPagePermission()');
 			return $hook ? $this->hasPagePermission($name, $context) : $this->___hasPagePermission($name, $context);
 		} 
 		
-		$hook = $this->wire('hooks')->isHooked('hasTemplatePermission()');
+		$hook = $hooks->isHooked('hasTemplatePermission()');
 		
 		if($context instanceof Template) {
 			return $hook ? $this->hasTemplatePermission($name, $context) : $this->___hasTemplatePermission($name, $context);
@@ -183,7 +196,7 @@ class User extends Page {
 		
 		if($context === true || $context === 'templates') {
 			$addedTemplates = array();
-			foreach($this->wire('templates') as $t) {
+			foreach($this->wire()->templates as $t) {
 				if(!$t->useRoles) continue;
 				$has = $hook ? $this->hasTemplatePermission($name, $t) : $this->___hasTemplatePermission($name, $t);
 				if($has) $addedTemplates[] = $t;
@@ -212,7 +225,7 @@ class User extends Page {
 	protected function ___hasPagePermission($name, Page $page = null) {
 
 		if($this->isSuperuser()) return true; 
-		$permissions = $this->wire('permissions');
+		$permissions = $this->wire()->permissions;
 
 		// convert $name to a Permission object (if it isn't already)
 		if($name instanceof Page) {
@@ -242,6 +255,7 @@ class User extends Page {
 
 		if(!$permission || !$permission->id) return false;
 
+		/** @var PageArray $roles */
 		$roles = $this->getUnformatted('roles'); 
 		if(empty($roles) || !$roles instanceof PageArray) return false; 
 		$has = false; 
@@ -306,7 +320,7 @@ class User extends Page {
 		if($template instanceof Template) {
 			// fantastic then
 		} else if(is_string($template) || is_int($template)) {
-			$template = $this->templates->get($this->wire('sanitizer')->name($template)); 
+			$template = $this->templates->get($this->wire()->sanitizer->name($template)); 
 			if(!$template) return false;
 		} else {
 			return false;
@@ -316,6 +330,7 @@ class User extends Page {
 		// because we don't have any page context to inherit from at this point
 		// if(!$template->useRoles) return false; 
 
+		/** @var PageArray $roles */
 		$roles = $this->get('roles'); 
 		if(empty($roles)) return false; 
 		$has = false;
@@ -372,8 +387,9 @@ class User extends Page {
 	 */
 	public function getPermissions(Page $page = null) {
 		// Does not currently include page-add or page-create permissions (runtime).
-		if($this->isSuperuser()) return $this->wire('permissions')->getIterator(); // all permissions
-		$permissions = $this->wire('pages')->newPageArray();
+		if($this->isSuperuser()) return $this->wire()->permissions->getIterator(); // all permissions
+		$permissions = $this->wire()->pages->newPageArray();
+		/** @var PageArray $roles */
 		$roles = $this->get('roles'); 
 		if(empty($roles)) return $permissions; 
 		foreach($roles as $key => $role) {
@@ -400,19 +416,23 @@ class User extends Page {
 	 */
 	public function isSuperuser() {
 		if(is_bool($this->isSuperuser)) return $this->isSuperuser;
-		$config = $this->wire('config');
+		$config = $this->wire()->config;
 		if($this->id === $config->superUserPageID) {
 			$is = true;
 		} else if($this->id === $config->guestUserPageID) {
 			$is = false;
 		} else {
 			$superuserRoleID = (int) $config->superUserRolePageID;
+			/** @var PageArray $roles */
 			$roles = $this->getUnformatted('roles');
 			if(empty($roles)) return false; // no cache intentional
 			$is = false;
-			foreach($roles as $role) if(((int) $role->id) === $superuserRoleID) {
-				$is = true;
-				break;
+			foreach($roles as $role) {
+				/** @var Role $role */
+				if(((int) $role->id) === $superuserRoleID) {
+					$is = true;
+					break;
+				}
 			}
 		}
 		$this->isSuperuser = $is;
@@ -426,17 +446,23 @@ class User extends Page {
 	 *
 	 */ 
 	public function isGuest() {
-		return $this->id === $this->wire('config')->guestUserPageID; 
+		return $this->id === $this->wire()->config->guestUserPageID; 
 	}
 
 	/**
-	 * Is the current user logged in?
+	 * Is the current $user logged in and the same as this user?
+	 * 
+	 * When this method returns true, it means the current $user (API variable) is 
+	 * this user and that they are logged in. 
 	 *
 	 * @return bool
 	 *
 	 */
 	public function isLoggedin() {
-		return !$this->isGuest();
+		if($this->isGuest()) return false;
+		$user = $this->wire()->user;
+		$userId = $user ? $user->id : 0;
+		return $userId && "$userId" === "$this->id";
 	}
 
 	/**
@@ -450,7 +476,7 @@ class User extends Page {
 	protected function getFieldValue($key, $selector = '') {
 		$value = parent::getFieldValue($key, $selector);
 		if(!$value && $key == 'language') {
-			$languages = $this->wire('languages');
+			$languages = $this->wire()->languages;
 			if($languages) $value = $languages->getDefault();
 		}
 		return $value;
@@ -485,7 +511,7 @@ class User extends Page {
 	 */
 	public function ___setEditor(WirePageEditor $editor) {
 		parent::___setEditor($editor); 
-		if(!$editor instanceof ProcessUser) $this->wire('session')->redirect($this->editUrl());
+		if(!$editor instanceof ProcessUser) $this->wire()->session->redirect($this->editUrl());
 	}
 
 	/**
@@ -493,11 +519,11 @@ class User extends Page {
 	 * 
 	 * #pw-internal
 	 *
-	 * @return Pages|PagesType
+	 * @return Pages|PagesType|Users
 	 *
 	 */
 	public function getPagesManager() {
-		return $this->wire('users');
+		return $this->wire()->users;
 	}
 
 	/**

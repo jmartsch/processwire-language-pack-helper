@@ -32,6 +32,8 @@
  * - Inputfields.input(f): Get the input element(s) within the given Inputfield
  * - Inputfields.insertBefore(f, ff): Insert Inputfield 'f' before Inputfield 'ff'.
  * - Inputfields.insertAfter(f, ff): Insert Inputfield 'f' after Inputfield 'ff'.
+ * - Inputfields.startSpinner(f): Start spinner for Inputfield.
+ * - Inputfields.stopSpinner(f): Stop spinner for Inputfield. 
  * - Inputfields.init(target): Manually initialize all .Inputfield elements within target.
  *   Calling init() is only necessary for Inputfields not present during page load. 
  * - This file also contains lots of other functions, but they are not part of the public API. 
@@ -103,6 +105,7 @@
  * - columnWidth: Triggered on .Inputfield when an API call to set column width, receives width percent after event argument.
  * 
  * Other events:
+ * - changed: Triggered on an .Inputfield that has an input element within it changed (3.0.184+)
  * - AjaxUploadDone: Triggered on an .Inputfield element after a file has been ajax-uploaded within it. 
  * 
  * ATTRIBUTES
@@ -143,6 +146,18 @@ var Inputfields = {
 	processingIfs: false,
 
 	/**
+	 * Are we currently toggling collapsed state or visibility?
+	 * 
+ 	 */	
+	toggling: false,
+
+	/**
+	 * Toggle behavior (0=standard, 1=consistent)
+	 * 
+ 	 */	
+	toggleBehavior: 0, 
+
+	/**
 	 * Default duration (in MS) for certain visual animations
 	 * 
 	 */
@@ -178,16 +193,33 @@ var Inputfields = {
 		var $header = $inputfield.children('.InputfieldHeader, .ui-widget-header');
 		var $content = $inputfield.children('.InputfieldContent, .ui-widget-content');
 		var $toggleIcon = $header.find('.toggle-icon');
-		var isCollapsed = $inputfield.hasClass("InputfieldStateCollapsed");
+		var isCollapsed = $inputfield.hasClass('InputfieldStateCollapsed');
+		var isAjax = $inputfield.hasClass('collapsed10') || $inputfield.hasClass('collapsed11');
 		var Inputfields = this;
+		var $siblings = null;
 
 		if($inputfield.hasClass('InputfieldAjaxLoading')) return $inputfield;
 		if($inputfield.hasClass('InputfieldStateToggling')) return $inputfield;
+		
+		if(!isAjax && !this.toggling && $inputfield.hasClass('InputfieldColumnWidth')) {
+			var $siblings = Inputfields.getAllInRow($inputfield);
+			if($siblings.length < 2) $siblings = null;
+		}
 
 		if(typeof open == "undefined" || open === null) open = isCollapsed;
 		if(typeof duration == "undefined") duration = this.defaultDuration;
 
 		function completed() {
+			if(Inputfields.toggling === $inputfield.prop('id')) {
+				if($siblings && $siblings.length) {
+					//Inputfields.toggle($siblings, open, duration, callback);
+					$siblings.each(function() {
+						Inputfields.toggle(jQuery(this), open, 0);
+					});
+				}
+				setTimeout(function() { Inputfields.toggling = false; }, 100);
+				$siblings = null;
+			}
 			if(typeof callback != "undefined") callback($inputfield, open, duration);
 		}
 
@@ -202,11 +234,11 @@ var Inputfields = {
 		}
 
 		function opened() {
-			$inputfield.trigger('opened');
+			$inputfield.trigger('opened', $inputfield);
 			if($inputfield.hasClass('InputfieldColumnWidth')) {
 				$inputfield.children('.InputfieldContent').show();
 			}
-			if(!$inputfield.hasClass('InputfieldNoFocus')) {
+			if($inputfield.prop('id') === Inputfields.toggling && !$inputfield.hasClass('InputfieldNoFocus')) {
 				Inputfields.focus($inputfield);
 			}
 			toggled();
@@ -214,7 +246,7 @@ var Inputfields = {
 
 		function closed() {
 			if($inputfield.css('overflow') == 'hidden') $inputfield.css('overflow', '');
-			$inputfield.trigger('closed');
+			$inputfield.trigger('closed', $inputfield);
 			if($inputfield.hasClass('InputfieldColumnWidth')) {
 				$inputfield.children('.InputfieldContent').hide();
 			}
@@ -254,14 +286,16 @@ var Inputfields = {
 		}
 
 		// if ajax loaded, force InputfieldStates() click handler to open this one
-		if(isCollapsed && ($inputfield.hasClass('collapsed10') || $inputfield.hasClass('collapsed11'))) {
+		if(isCollapsed && isAjax) {
 			$toggleIcon.click();
 			return $inputfield;
 		}
+	
+		if(!this.toggling) this.toggling = $inputfield.prop('id');
 
 		// handle either open or close
 		if(open && isCollapsed) {
-			$inputfield.addClass('InputfieldStateToggling').trigger('openReady');
+			$inputfield.addClass('InputfieldStateToggling').trigger('openReady', $inputfield);
 			if(duration && jQuery.ui) {
 				$inputfield.toggleClass('InputfieldStateCollapsed', duration, opened);
 			} else {
@@ -269,7 +303,7 @@ var Inputfields = {
 				opened();
 			}
 		} else if(!open && !isCollapsed) {
-			$inputfield.addClass('InputfieldStateToggling').trigger('closeReady');
+			$inputfield.addClass('InputfieldStateToggling').trigger('closeReady', $inputfield);
 			if(duration && jQuery.ui) {
 				$inputfield.toggleClass('InputfieldStateCollapsed', duration, closed);
 			} else {
@@ -279,6 +313,28 @@ var Inputfields = {
 		}
 		
 		return $inputfield;
+	},
+
+	/**
+	 * Toggle all given $inputfields open or closed
+	 *
+	 * Also triggers these events on each $inputfield: openReady, closeReady, opened, closed
+	 *
+	 * @param object $inputfields jQuery object of one or more Inputfields or selector string that matches Inputfields
+	 * @param bool open Boolean true to open, false to close, or null (or omit) for opposite of current state (default=opposite of current state)
+	 * @param int duration How many milliseconds for animation? (default=100)
+	 * @param function callback Optional function to call upon completion, receives Inputfield object, open and duration as arguments (default=none)
+	 * @returns Returns jQuery object of Inputfields 
+	 * @since 3.0.178
+	 *
+	 */
+	toggleAll: function($inputfields, open, duration, callback) {
+		if(typeof $inputfields === "string") $inputfields = jQuery($inputfields);
+		var Inputfields = this;
+		$($inputfields.get().reverse()).each(function(i, el) {
+			Inputfields.toggle($(el), open, duration, callback);
+		});
+		return $inputfields;
 	},
 
 	/**
@@ -464,6 +520,7 @@ var Inputfields = {
 			var hasNoFocus = $inputfield.hasClass('InputfieldNoFocus');
 			// Inputfields.toggle() can call Inputfields.focus(), so prevent the focus by adding this class
 			if(!hasNoFocus) $inputfield.addClass('InputfieldNoFocus');
+			if($inputfield.hasClass('WireTab') && !$inputfield.is(':visible')) $inputfield = $inputfield.find('.Inputfield');
 			this.toggle($inputfield, true, 0, function($in, open, duration) {
 				if(level > 9) return;
 				var timeout = level > 0 ? 10 * level : 0;
@@ -594,6 +651,49 @@ var Inputfields = {
 			if(pct < 1) pct = 100;
 			return pct;
 		}
+	},
+
+	/**
+	 * Start a spinner for Inputfield
+	 *
+	 * @param $inputfield
+	 *
+	 */
+	startSpinner: function($inputfield) {
+		
+		$inputfield = this.inputfield($inputfield);
+		if(!$inputfield.length) return;
+
+		var id = $inputfield.attr('id') + '-spinner';
+		var $spinner = $('#' + id);
+		var $header = $inputfield.children('.InputfieldHeader');
+		
+		if(!$spinner.length) {
+			$spinner = $("<i class='InputfieldSpinner fa fa-spin fa-spinner'></i>");
+			$spinner.attr('id', id);
+		}
+		
+		$spinner.css({ 
+			float: 'right',
+			marginRight: '30px',
+			marginTop: '3px'
+		});
+		
+		$header.append($spinner.hide());
+		$spinner.fadeIn();
+	},
+
+	/**
+	 * Stop a spinner for Inputfield
+	 *
+	 * @param $inputfield
+	 *
+	 */
+	stopSpinner: function($inputfield) {
+		$inputfield = this.inputfield($inputfield);
+		if(!$inputfield.length) return;
+		var $spinner = $('#' + $inputfield.attr('id') + '-spinner');
+		if($spinner.length) $spinner.fadeOut('fast', function() { $spinner.remove(); }); 
 	},
 
 	/**
@@ -750,6 +850,7 @@ var Inputfields = {
 				var $in = jQuery(':input[name=' + $inputfield + ']');
 				if(!$in.length) $in = jQuery(':input[id=' + $inputfield + ']'); 
 				if(!$in.length) $in = jQuery(':input[name="' + $inputfield + '[]"]'); // array name
+				if(!$in.length) $in = jQuery('#' + $inputfield + '.Inputfield'); 
 				$inputfield = $in;
 			} else {
 				$inputfield = jQuery($inputfield)
@@ -795,7 +896,72 @@ var Inputfields = {
 			// some other action we do not recognize
 		}
 	},
+
+	/**
+	 * Get first Inputfield in row that $inputfield appears in 
+	 * 
+	 * @param $inputfield
+	 * @returns object
+	 * @since 3.0.170
+	 * 
+	 */
+	getFirstInRow: function($inputfield) {
+		$inputfield = this.inputfield($inputfield);
+		if(!$inputfield.length) return $inputfield;
+		if(!$inputfield.hasClass('InputfieldColumnWidth')) return $inputfield;
+		if($inputfield.hasClass('InputfieldColumnWidthFirst')) return $inputfield;
+		var $col = $inputfield;
+		do {
+			$col = $col.prev('.Inputfield');
+			if($col.hasClass('InputfieldColumnWidthFirst')) break; // found it
+		} while($col.length && $col.hasClass('InputfieldColumnWidth'));
+		return $col.hasClass('InputfieldColumnWidthFirst') ? $col : $inputfield;
+	},
 	
+	/**
+	 * Get all siblings of $inputfield in an InputfieldColumnWidth width row
+	 * 
+ 	 * @param $inputfield
+	 * @param bool andSelf Specify true to also include $inputfield, or omit argument to exclude $inputfield (default=false)
+	 * @param bool andHidden Include hidden inputfields also? (default=false)
+	 * @returns object
+	 * @since 3.0.170
+	 * 
+	 */	
+	getSiblingsInRow: function($inputfield, andSelf, andHidden) {
+		$inputfield = this.inputfield($inputfield);
+		if(!$inputfield.length) return $inputfield;
+		if(typeof andSelf === "undefined") andSelf = false;
+		if(typeof andHidden === "undefined") andHidden = false;
+		var pct = this.columnWidth($inputfield);
+		if(pct < 1 || pct > 99) return jQuery([]); 
+		var $col = this.getFirstInRow($inputfield);
+		var sel = '';
+		while($col.length) {
+			if($col.hasClass('InputfieldStateHidden') && !andHidden) {
+				// skip hidden inputfield
+			} else if(andSelf || $col.prop('id') !== $inputfield.prop('id')) {
+				// add inputfield
+				sel += (sel.length ? ',' : '') + '#' + $col.prop('id');
+			}
+			$col = $col.next('.InputfieldColumnWidth');
+			if($col.hasClass('InputfieldColumnWidthFirst')) break;
+		}
+		return sel.length ? jQuery(sel) : $inputfield;	
+	},
+
+	/**
+	 * Get all Inputfields in row occupied by given $inputfield
+	 * 
+ 	 * @param $inputfield
+	 * @returns object
+	 * @since 3.0.170
+	 * 
+	 */	
+	getAllInRow: function($inputfield, andHidden) {
+		if(typeof andHidden === "undefined") andHidden = false;
+		return this.getSiblingsInRow($inputfield, true, andHidden);
+	}
 	
 };
 
@@ -993,15 +1159,21 @@ function InputfieldDependencies($target) {
 
 			var _conditionValue = new String(condition.values[i]); // original
 			var conditionValue = trimValue(_conditionValue.replace(/\s/g, '_')); // spaces converted to "_"
-			consoleLog('conditionValue: ' + conditionValue);
-			var fieldID = "#Inputfield_" + conditionField + "_" + conditionValue;
+			var fieldID = "#Inputfield_" + conditionField + "_" + conditionValue; // i.e. "Inputfield_mycheckbox_1"
+			
 			$field = $(fieldID);
-			var inputType = $field.attr('type');
+			if(!$field.length) {
+				fieldID = '#' + conditionField + "_" + conditionValue; // i.e. "mycheckbox_1" (alternate)
+				$field = $(fieldID);
+			}
+
+			consoleLog('Required condition value: ' + conditionValue);
 
 			if($field.length) {
-				consoleLog("Found " + inputType + " via value " + fieldID);
 				// found a matching checkbox/radio field
+				var inputType = $field.attr('type');
 				var val = '';
+				consoleLog("Found " + inputType + " via value " + fieldID);
 				if($field.is(":checked")) {
 					// checkbox or radio IS checked
 					val = $field.val();
@@ -1370,22 +1542,29 @@ function InputfieldDependencies($target) {
 			// attach change event handler to all applicable fields
 			for(var fn = 0; fn < fields.length; fn++) {
 				
-				var fieldAndSubfield = extractFieldAndSubfield(fields[fn]); 
+				fieldAndSubfield = extractFieldAndSubfield(fields[fn]); 
 				var f = fieldAndSubfield.field;
 
 				// locate the dependency inputfield
 				var $inputfield = $("#Inputfield_" + f);
-				if ($inputfield.length == 0) {
+				if($inputfield.length == 0) {
 					consoleLog("Unable to find inputfield by: #Inputfield_" + f); 
 					$inputfield = $("#" + f);
 					if($inputfield.length == 0) consoleLog("Unable to find inputfield by: #" + f); 
 				}
 
 				// if the dependency inputfield isn't found, locate its wrapper..
-				if ($inputfield.length == 0) {
+				if($inputfield.length == 0) {
 					// use any inputs within the wrapper
 					$inputfield = $("#wrap_Inputfield_" + f).find(":input");
 					if($inputfield.length == 0) consoleLog("Unable to find inputfield by: #wrap_Inputfield_" + f + " :input");
+				}
+				
+				// if the dependency inputfield isn't found, locate its wrapper..
+				if($inputfield.length == 0) {
+					// use any inputs within the wrapper
+					$inputfield = $("#wrap_" + f).find(":input");
+					if($inputfield.length == 0) consoleLog("Unable to find inputfield by: #wrap_" + f + " :input");
 				}
 
 				// attach change event to dependency inputfield
@@ -1880,7 +2059,7 @@ function InputfieldStates($target) {
 				});
 				if(isTab) {
 					$header.effect('highlight', 500);
-				} else {
+				} else if(Inputfields.toggleBehavior < 1) {
 					$header.click();
 				}
 			}, 500);
@@ -1901,10 +2080,13 @@ function InputfieldStates($target) {
 		var config = ProcessWire.config;
 	} 
 	if(typeof config !== "undefined" && config.debug) {
-		$('label.InputfieldHeader > i.toggle-icon', $target).hover(function() {
+		$('.InputfieldHeader > i.toggle-icon', $target).hover(function() {
 			var $label = $(this).parent('label');
 			if($label.length == 0) return;
-			var text = $label.attr('for').replace(/^Inputfield_/, '');
+			var forId = $label.attr('for');
+			if(!forId) forId = $label.parent().attr('id');
+			if(!forId) return;
+			var text = forId.replace(/^Inputfield_|wrap_Inputfield_|wrap_/, '');
 			if(text.length) {
 				var $tip = $("<small class='InputfieldNameTip ui-priority-secondary'>&nbsp;" + text + "&nbsp;</small>");
 				$tip.css('float', 'right');
@@ -1934,6 +2116,7 @@ function InputfieldStates($target) {
 		var isCollapsed = $li.hasClass("InputfieldStateCollapsed"); 
 		var wasCollapsed = $li.hasClass("InputfieldStateWasCollapsed");
 		var duration = 100;
+		var isAjax = $li.hasClass('collapsed10') || $li.hasClass('collapsed11');
 	
 		if(!$li.length) return;
 		if($li.hasClass('InputfieldAjaxLoading')) return false;
@@ -1943,13 +2126,16 @@ function InputfieldStates($target) {
 			if(typeof data.duration != "undefined") duration = data.duration;
 		}
 
-		if(isCollapsed && ($li.hasClass('collapsed10') || $li.hasClass('collapsed11'))) {
+		if(isCollapsed && isAjax) {	
 			if(InputfieldStateAjaxClick($li)) return false;
 		}
 			
 		if(isCollapsed || wasCollapsed || isIcon) {
 			$li.addClass('InputfieldStateWasCollapsed'); // this class only used here
 			Inputfields.toggle($li, null, duration);
+		} else if(Inputfields.toggleBehavior === 1) {
+			// open/close implied by header label click
+			$icon.click();
 		} else {
 			// Inputfield not collapsible unless toggle icon clicked, so pulsate the toggle icon and focus any inputs
 			if(typeof jQuery.ui != 'undefined') {
@@ -1985,19 +2171,21 @@ function InputfieldStates($target) {
 	});
 
 	// confirm changed forms that user navigates away from before submitting
-	$(document).on('change', '.InputfieldFormConfirm :input, .InputfieldFormConfirm .Inputfield', function() {
-		var $this = $(this);	
+	$(document).on('change', '.InputfieldForm :input, .InputfieldForm .Inputfield', function() {
+		var $this = $(this);
 		if($this.hasClass('Inputfield')) {
 			// an .Inputfield element
-			if(!$this.hasClass('InputfieldIgnoreChanges')) $this.addClass('InputfieldStateChanged');
-			return false;
+			if($this.hasClass('InputfieldIgnoreChanges')) return false;
+			$this.addClass('InputfieldStateChanged').trigger('changed');
+			// .InputfieldFormConfirm forms stop change at parent .Inputfield element
+			if($this.closest('.InputfieldFormConfirm').length > 0) return false;
 		} else {
 			// an :input element
 			if($this.hasClass('InputfieldIgnoreChanges') || $this.closest('.InputfieldIgnoreChanges').length) return false;
-			$this.closest('.Inputfield').addClass('InputfieldStateChanged');
+			$this.closest('.Inputfield').addClass('InputfieldStateChanged').trigger('changed');
 		}
 	});
-	
+
 	$(document).on('submit', '.InputfieldFormConfirm', function() {
 		$(this).addClass('InputfieldFormSubmitted');
 	});
