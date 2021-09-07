@@ -1,27 +1,19 @@
----
-name: "pre-release"
+name: Releases
 
 on:
   push:
-    branches:
-      - "master"
+    tags:
+      - '*'
 
 jobs:
-  pre-release:
-    name: "Pre Release"
-    runs-on: "ubuntu-latest"
 
+  build:
+    runs-on: ubuntu-latest
     steps:
-      # ...
-      - name: "Build & test"
-        run: |
-          echo "done!"
-
-      - uses: "marvinpinto/action-automatic-releases@latest"
+      - uses: actions/checkout@v2
+      - uses: ncipollo/release-action@v1
         with:
-          repo_token: "${{ secrets.GITHUB_TOKEN }}"
-          automatic_release_tag: "latest"
-          prerelease: true
-          title: "Development Build"
-          files: |
-            site/assets/files/1019/
+          artifacts: "release.tar.gz,site/assets/files/1019/*.json"
+#          bodyFile: "body.md"
+          token: ${{ secrets.GITHUB_TOKEN }}
+
