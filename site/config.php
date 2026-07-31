@@ -48,10 +48,11 @@ $config->debug = true;
  * Installer: Database Configuration
  * 
  */
-$config->dbHost = 'localhost';
-$config->dbName = 'processwire-lang-de';
-$config->dbUser = 'root';
-$config->dbPass = '';
+$isDdev = (bool) getenv('DDEV_SITENAME');
+$config->dbHost = $isDdev ? 'db' : 'localhost';
+$config->dbName = $isDdev ? 'db' : 'processwire-lang-de';
+$config->dbUser = $isDdev ? 'db' : 'root';
+$config->dbPass = $isDdev ? 'db' : '';
 $config->dbPort = '3306';
 
 /**
@@ -95,5 +96,7 @@ $config->installed = 1572472518;
  * Installer: HTTP Hosts Whitelist
  * 
  */
-$config->httpHosts = array('pw-lang-de-new.localhost', 'www.pw-lang-de-new.localhost');
+$config->httpHosts = $isDdev
+	? array('pw-lang-de-helper.ddev.site')
+	: array('pw-lang-de-new.localhost', 'www.pw-lang-de-new.localhost');
 

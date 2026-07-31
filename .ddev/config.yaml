@@ -1,0 +1,9 @@
+name: pw-lang-de-helper
+type: php
+docroot: .
+php_version: "8.3"
+webserver_type: nginx-fpm
+database:
+  type: mariadb
+  version: "11.8"
+timezone: Europe/Berlin
